@@ -1,0 +1,71 @@
+{
+  "Language": {
+    "CurrentCulture": "zh-CN",
+    "SupportedCultures": [
+      "en-US",
+      "zh-CN"
+    ]
+  },
+  "UI": {
+    "AutoMode": {
+      "en-US": "Auto Mode",
+      "zh-CN": "自动模式"
+    },
+    "ManualMode": {
+      "en-US": "Manual Mode",
+      "zh-CN": "手动模式"
+    },
+    "PausedMode": {
+      "en-US": "Paused Mode",
+      "zh-CN": "暂停模式"
+    },
+    "EditConfiguration": {
+      "en-US": "Edit Configuration",
+      "zh-CN": "编辑配置"
+    },
+    "ReloadConfiguration": {
+      "en-US": "Reload Configuration",
+      "zh-CN": "重新加载配置"
+    },
+    "Exit": {
+      "en-US": "Exit",
+      "zh-CN": "退出"
+    },
+    "SwitchLanguage": {
+      "en-US": "Switch Language",
+      "zh-CN": "切换语言"
+    },
+    "English": {
+      "en-US": "English",
+      "zh-CN": "英语"
+    },
+    "Chinese": {
+      "en-US": "中文",
+      "zh-CN": "中文"
+    },
+    "PowerModeChanged": {
+      "en-US": "Power Mode",
+      "zh-CN": "电源模式"
+    },
+    "AutoModeActivated": {
+      "en-US": "Switched to Auto mode\\nMonitoring foreground applications",
+      "zh-CN": "切换到自动模式\\n监控前台应用程序"
+    },
+    "ManualModeActivated": {
+      "en-US": "Switched to Manual mode\\nNo automatic adjustments",
+      "zh-CN": "切换到手动模式\\n无自动调整"
+    },
+    "PausedModeActivated": {
+      "en-US": "Paused mode\\nNo power adjustments",
+      "zh-CN": "暂停模式\\n无电源调整"
+    },
+    "ConfigurationReloaded": {
+      "en-US": "Configuration reloaded successfully!",
+      "zh-CN": "配置重新加载成功！"
+    },
+    "ApplicationStarted": {
+      "en-US": "Application started in Auto mode",
+      "zh-CN": "应用程序以自动模式启动"
+    }
+  }
+}
