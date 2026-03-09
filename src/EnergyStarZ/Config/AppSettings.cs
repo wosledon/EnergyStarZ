@@ -12,6 +12,7 @@ namespace EnergyStarZ.Config
         public List<string> BypassProcessList { get; set; } = new List<string>();
         public int LRUCacheSize { get; set; } = 5;
         public int TimeoutSeconds { get; set; } = 30;
+        public bool EnableAutoPowerMode { get; set; } = false; // 新增：是否启用自动电源模式
     }
 
     public static class ConfigurationHelper

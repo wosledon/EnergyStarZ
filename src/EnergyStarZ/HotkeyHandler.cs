@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
+using EnergyStarZ.Interop;
 
 namespace EnergyStarZ
 {
@@ -41,13 +42,13 @@ namespace EnergyStarZ
         private void RegisterHotkeys()
         {
             // 注册 Ctrl+Alt+A 切换模式
-            Win32Api.RegisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE, HotKeyModifiers.Control | HotKeyModifiers.Alt, (uint)Keys.A);
-            
+            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+
             // 注册 Ctrl+Alt+P 暂停
-            Win32Api.RegisterHotKey(Handle, HOTKEY_ID_PAUSE, HotKeyModifiers.Control | HotKeyModifiers.Alt, (uint)Keys.P);
-            
+            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_PAUSE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+
             // 注册 Ctrl+Alt+R 恢复
-            Win32Api.RegisterHotKey(Handle, HOTKEY_ID_RESUME, HotKeyModifiers.Control | HotKeyModifiers.Alt, (uint)Keys.R);
+            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_RESUME, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
         }
 
         protected override void WndProc(ref Message m)
@@ -73,31 +74,13 @@ namespace EnergyStarZ
             if (disposing)
             {
                 // 注销热键
-                Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE);
-                Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_PAUSE);
-                Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_RESUME);
+                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE);
+                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_PAUSE);
+                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_RESUME);
             }
             base.Dispose(disposing);
         }
     }
 
-    // 定义热键修饰符枚举
-    [Flags]
-    public enum HotKeyModifiers : uint
-    {
-        Alt = 0x0001,
-        Control = 0x0002,
-        Shift = 0x0004,
-        Win = 0x0008
-    }
 
-    // 在 Win32Api 中添加热键相关的 P/Invoke 声明
-    public static class Win32Api
-    {
-        [DllImport("user32.dll")]
-        public static extern bool RegisterHotKey(IntPtr hWnd, int id, HotKeyModifiers fsModifiers, uint vk);
-
-        [DllImport("user32.dll")]
-        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-    }
 }

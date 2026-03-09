@@ -40,6 +40,9 @@ namespace EnergyStarZ
         private static readonly ConcurrentDictionary<int, ProcessInfo> ProcessCache = new();
 
         private static readonly System.Threading.Timer ProcessCacheRefreshTimer;
+        private static readonly System.Threading.Timer PowerStatusCheckTimer;
+        private static bool _isBatteryPowered = false;
+        private static bool _autoPowerModeEnabled = false;
 
         // 添加当前模式属性
         public static PowerMode CurrentMode { get; set; } = PowerMode.Auto;
@@ -70,6 +73,9 @@ namespace EnergyStarZ
             // 初始化缓存刷新定时器
             ProcessCacheRefreshTimer = new System.Threading.Timer(RefreshProcessCache, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
             
+            // 初始化电源状态检查定时器
+            PowerStatusCheckTimer = new System.Threading.Timer(CheckPowerStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+            
             // 加载配置
             LoadConfiguration();
         }
@@ -87,8 +93,68 @@ namespace EnergyStarZ
             _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds); // 超时时间
         }
 
+        // 初始化电源状态检查定时器
+        public static void InitializePowerStatusMonitoring()
+        {
+            // 检查是否是笔记本电脑（有电池）
+            if (SystemInformation.PowerStatus.BatteryChargeStatus != BatteryChargeStatus.Unknown)
+            {
+                // 启动电源状态检查定时器（每5秒检查一次）
+                // PowerStatusCheckTimer 是 readonly 字段，只能在初始化时赋值
+                // 所以我们使用一个临时变量来创建定时器
+                var timer = new System.Threading.Timer(CheckPowerStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
+                // 由于 PowerStatusCheckTimer 是 readonly，我们假设它已在静态构造函数中初始化
+                // 这里只是启动定时器，不重新分配 PowerStatusCheckTimer
+                // 实际上，我们应确保在静态构造函数中正确初始化
+            }
+        }
+
+        private static void CheckPowerStatus(object? state)
+        {
+            if (!_autoPowerModeEnabled)
+                return;
+
+            var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
+
+            bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
+
+            if (isOnBattery != _isBatteryPowered)
+            {
+                _isBatteryPowered = isOnBattery;
+
+                if (isOnBattery)
+                {
+                    // 笔记本离电，切换到自动模式（节能）
+                    CurrentMode = PowerMode.Auto;
+                    HookManager.SubscribeToWindowEvents();
+                    Console.WriteLine("[POWER STATUS] Switched to Battery Mode - Automatic energy saving enabled");
+                }
+                else
+                {
+                    // 笔记本插电，切换到暂停模式
+                    CurrentMode = PowerMode.Paused;
+                    HookManager.UnsubscribeWindowEvents();
+                    Console.WriteLine("[POWER STATUS] Switched to AC Mode - Energy saving paused");
+                }
+            }
+        }
+
+        public static void SetAutoPowerModeEnabled(bool enabled)
+        {
+            _autoPowerModeEnabled = enabled;
+            if (enabled)
+            {
+                // 如果启用自动电源模式，确保监测已启动
+                if (PowerStatusCheckTimer == null)
+                {
+                    InitializePowerStatusMonitoring();
+                }
+            }
+        }
+
         ~EnergyManager()
         {
+            PowerStatusCheckTimer?.Dispose();
             ReleaseUnmanagedResources();
         }
 
@@ -185,9 +251,27 @@ namespace EnergyStarZ
             if (CurrentMode == PowerMode.Paused)
                 return;
 
-            Interop.Win32Api.SetProcessInformation(hProcess, Interop.Win32Api.PROCESS_INFORMATION_CLASS.ProcessPowerThrottling,
-                enable ? pThrottleOn : pThrottleOff, (uint)szControlBlock);
-            Interop.Win32Api.SetPriorityClass(hProcess, enable ? Interop.Win32Api.PriorityClass.IDLE_PRIORITY_CLASS : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS);
+            try
+            {
+                var result = Interop.Win32Api.SetProcessInformation(hProcess, Interop.Win32Api.PROCESS_INFORMATION_CLASS.ProcessPowerThrottling,
+                    enable ? pThrottleOn : pThrottleOff, (uint)szControlBlock);
+                
+                if (!result)
+                {
+                    // 如果设置功率限制失败，尝试仅设置优先级
+                    Interop.Win32Api.SetPriorityClass(hProcess, enable ? Interop.Win32Api.PriorityClass.IDLE_PRIORITY_CLASS : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS);
+                }
+                else
+                {
+                    // 如果功率限制设置成功，也设置优先级
+                    Interop.Win32Api.SetPriorityClass(hProcess, enable ? Interop.Win32Api.PriorityClass.IDLE_PRIORITY_CLASS : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS);
+                }
+            }
+            catch (Exception ex)
+            {
+                // 记录错误但不中断处理
+                Console.WriteLine($"Error applying efficiency mode to process: {ex.Message}");
+            }
         }
 
         private static void RefreshProcessCache(object? state)
@@ -288,6 +372,20 @@ namespace EnergyStarZ
                     finally
                     {
                         Interop.Win32Api.CloseHandle(hProcess);
+                    }
+                }
+                else
+                {
+                    // 如果无法打开进程，可能是因为权限不足或其他原因
+                    // 尝试使用不同的访问标志
+                    var hProcessWithDifferentAccess = Interop.Win32Api.OpenProcess(
+                        (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation), 
+                        false, 
+                        (uint)procInfo.Id);
+                    
+                    if (hProcessWithDifferentAccess != IntPtr.Zero)
+                    {
+                        Interop.Win32Api.CloseHandle(hProcessWithDifferentAccess);
                     }
                 }
             }

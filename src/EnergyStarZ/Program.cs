@@ -83,6 +83,13 @@ namespace EnergyStarZ
                 EnergyManager.CurrentMode = PowerMode.Auto; // 默认为自动模式
             }
 
+            // 启用自动电源模式（如果配置中启用）
+            EnergyManager.SetAutoPowerModeEnabled(_settings.EnableAutoPowerMode);
+            if (_settings.EnableAutoPowerMode)
+            {
+                EnergyManager.InitializePowerStatusMonitoring();
+            }
+
             // 创建系统托盘应用程序上下文
             var applicationContext = new SystemTrayApplicationContext(_settings);
             

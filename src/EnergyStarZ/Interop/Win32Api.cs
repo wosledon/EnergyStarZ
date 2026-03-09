@@ -100,5 +100,22 @@ namespace EnergyStarZ.Interop
             public ProcessorPowerThrottlingFlags ControlMask;
             public ProcessorPowerThrottlingFlags StateMask;
         }
+        
+        // 热键相关的 P/Invoke 声明
+        [DllImport("user32.dll")]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, HotKeyModifiers fsModifiers, uint vk);
+
+        [DllImport("user32.dll")]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        // 定义热键修饰符枚举
+        [Flags]
+        public enum HotKeyModifiers : uint
+        {
+            Alt = 0x0001,
+            Control = 0x0002,
+            Shift = 0x0004,
+            Win = 0x0008
+        }
     }
 }

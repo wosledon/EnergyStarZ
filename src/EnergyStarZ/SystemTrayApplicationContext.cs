@@ -99,18 +99,51 @@ namespace EnergyStarZ
             var exitItem = new ToolStripMenuItem(LocalizationManager.GetString("Exit"));
             exitItem.Click += OnExitClick;
 
+            // 添加自动电源模式开关
+            var autoPowerModeItem = new ToolStripMenuItem("Auto Power Mode");
+            autoPowerModeItem.Checked = _settings.EnableAutoPowerMode;
+            autoPowerModeItem.Click += OnAutoPowerModeClick;
+
             menu.Items.Add(autoModeItem);
             menu.Items.Add(manualModeItem);
             menu.Items.Add(pausedModeItem);
             menu.Items.Add(separator1);
-            menu.Items.Add(languageMenu);
+            menu.Items.Add(autoPowerModeItem);
             menu.Items.Add(separator2);
+            menu.Items.Add(languageMenu);
+            menu.Items.Add(separator3);
             menu.Items.Add(editConfigItem);
             menu.Items.Add(reloadConfigItem);
             menu.Items.Add(separator3);
             menu.Items.Add(exitItem);
 
             return menu;
+        }
+
+        private void OnAutoPowerModeClick(object sender, EventArgs e)
+        {
+            var menuItem = sender as ToolStripMenuItem;
+            if (menuItem != null)
+            {
+                bool enableAutoPowerMode = !menuItem.Checked;
+                menuItem.Checked = enableAutoPowerMode;
+
+                // 更新配置
+                _settings.EnableAutoPowerMode = enableAutoPowerMode;
+
+                // 更新 EnergyManager 的设置
+                EnergyManager.SetAutoPowerModeEnabled(enableAutoPowerMode);
+
+                if (enableAutoPowerMode)
+                {
+                    EnergyManager.InitializePowerStatusMonitoring();
+                    ShowNotification("Auto Power Mode", "Auto power mode enabled\nWill switch modes based on power source", ToolTipIcon.Info);
+                }
+                else
+                {
+                    ShowNotification("Auto Power Mode", "Auto power mode disabled", ToolTipIcon.Info);
+                }
+            }
         }
 
         private void SetPowerMode(PowerMode mode)
@@ -121,17 +154,17 @@ namespace EnergyStarZ
             switch (mode)
             {
                 case PowerMode.Auto:
-                    HookManager.SubscribeToWindowEvents();
+                    Interop.HookManager.SubscribeToWindowEvents();
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("AutoModeActivated"), ToolTipIcon.Info);
                     break;
                 case PowerMode.Manual:
-                    HookManager.UnsubscribeWindowEvents();
+                    Interop.HookManager.UnsubscribeWindowEvents();
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("ManualModeActivated"), ToolTipIcon.Info);
                     break;
                 case PowerMode.Paused:
                     // 恢复所有已应用的效率限制
                     EnergyManager.RestoreAllProcessesToNormal();
-                    HookManager.UnsubscribeWindowEvents();
+                    Interop.HookManager.UnsubscribeWindowEvents();
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("PausedModeActivated"), ToolTipIcon.Warning);
                     break;
             }
