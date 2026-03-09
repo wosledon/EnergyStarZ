@@ -1,5 +1,7 @@
 # EnergyStarZ
 
+[中文文档](README_zh.md) | [English Documentation](README.md)
+
 EnergyStarZ is a high-performance energy efficiency manager for Windows that automatically optimizes power consumption by adjusting process priorities and throttling background applications. It helps extend battery life on laptops while maintaining optimal performance for foreground applications.
 
 ## Features

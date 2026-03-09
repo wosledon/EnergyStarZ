@@ -1,5 +1,7 @@
 # EnergyStarZ
 
+[English Documentation](README.md) | [中文文档](README_zh.md)
+
 EnergyStarZ 是一款为 Windows 设计的高性能能源效率管理器，通过调整进程优先级和限制后台应用程序来自动优化功耗。它有助于延长笔记本电脑的电池续航时间，同时为前台应用程序保持最佳性能。
 
 ## 功能特性
