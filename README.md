@@ -70,6 +70,10 @@ The application uses Windows' PROCESS_POWER_THROTTLING API to control process ex
 - Windows 11 24H2 or later
 - .NET 10.0 Runtime
 
+## Acknowledgments
+
+This project is based on the original EnergyStar project by [imbushuo](https://github.com/imbushuo/EnergyStar). Special thanks to the original author for the innovative approach to Windows power management.
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
