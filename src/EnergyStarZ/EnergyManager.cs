@@ -21,7 +21,7 @@ namespace EnergyStarZ
         private static int _lruCacheSize = 5; // 默认缓存大小
         private static TimeSpan _timeoutPeriod = TimeSpan.FromSeconds(30); // 默认超时时间
         private static DateTime _lastSwitchTime = DateTime.MinValue;
-        
+
         // 保留原来的 pendingProcPid 和 pendingProcName 用于后台任务
         private static uint pendingProcPid = 0;
         private static string pendingProcName = "";
@@ -39,8 +39,8 @@ namespace EnergyStarZ
         // 使用 ConcurrentDictionary 缓存进程信息
         private static readonly ConcurrentDictionary<int, ProcessInfo> ProcessCache = new();
 
-        private static readonly System.Threading.Timer ProcessCacheRefreshTimer;
-        private static readonly System.Threading.Timer PowerStatusCheckTimer;
+        private static System.Threading.Timer? ProcessCacheRefreshTimer;
+        private static System.Threading.Timer? PowerStatusCheckTimer;
         private static bool _isBatteryPowered = false;
         private static bool _autoPowerModeEnabled = false;
 
@@ -69,13 +69,13 @@ namespace EnergyStarZ
 
             Marshal.StructureToPtr(throttleState, pThrottleOn, false);
             Marshal.StructureToPtr(unthrottleState, pThrottleOff, false);
-            
+
             // 初始化缓存刷新定时器
             ProcessCacheRefreshTimer = new System.Threading.Timer(RefreshProcessCache, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
-            
+
             // 初始化电源状态检查定时器
             PowerStatusCheckTimer = new System.Threading.Timer(CheckPowerStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
-            
+
             // 加载配置
             LoadConfiguration();
         }
@@ -154,8 +154,7 @@ namespace EnergyStarZ
 
         ~EnergyManager()
         {
-            PowerStatusCheckTimer?.Dispose();
-            ReleaseUnmanagedResources();
+            Dispose(false);
         }
 
         // LRU缓存管理方法
@@ -235,14 +234,28 @@ namespace EnergyStarZ
                 Marshal.FreeHGlobal(pThrottleOff);
                 pThrottleOff = IntPtr.Zero;
             }
-            
-            ProcessCacheRefreshTimer?.Dispose();
         }
 
         public void Dispose()
         {
-            ReleaseUnmanagedResources();
+            Dispose(true);
             GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                ProcessCacheRefreshTimer?.Dispose();
+                PowerStatusCheckTimer?.Dispose();
+                
+                // 清理缓存
+                ProcessCache.Clear();
+                _recentlyUsedApps.Clear();
+                _appLookup.Clear();
+            }
+            
+            ReleaseUnmanagedResources();
         }
 
         private static void ToggleEfficiencyMode(IntPtr hProcess, bool enable)
@@ -279,28 +292,47 @@ namespace EnergyStarZ
             try
             {
                 var processes = Process.GetProcesses();
-                var activeIds = new HashSet<int>();
+                var activeIds = new HashSet<int>(processes.Length); // 预设容量
 
                 foreach (var proc in processes)
                 {
-                    if (proc.SessionId != CurrentSessionId) continue;
+                    if (proc.SessionId != CurrentSessionId)
+                    {
+                        proc.Dispose(); // 立即释放不需要的进程对象
+                        continue;
+                    }
 
                     activeIds.Add(proc.Id);
-                    
+
                     if (!ProcessCache.ContainsKey(proc.Id))
                     {
                         // 只在需要时获取进程名称
                         ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, proc.ProcessName + ".exe"));
                     }
+                    else
+                    {
+                        // 如果进程已在缓存中，更新其名称（以防名称改变）
+                        var existing = ProcessCache[proc.Id];
+                        if (existing.Name != proc.ProcessName + ".exe")
+                        {
+                            ProcessCache[proc.Id] = new ProcessInfo(proc.Id, proc.ProcessName + ".exe");
+                        }
+                    }
                 }
 
                 // 移除已终止的进程
+                var keysToRemove = new List<int>();
                 foreach (var kvp in ProcessCache)
                 {
                     if (!activeIds.Contains(kvp.Key))
                     {
-                        ProcessCache.TryRemove(kvp.Key, out _);
+                        keysToRemove.Add(kvp.Key);
                     }
+                }
+
+                foreach (var key in keysToRemove)
+                {
+                    ProcessCache.TryRemove(key, out _);
                 }
 
                 foreach (var proc in processes)
@@ -552,17 +584,7 @@ namespace EnergyStarZ
             }
         }
 
-        // 进程信息结构体
-        private readonly struct ProcessInfo
-        {
-            public int Id { get; }
-            public string Name { get; }
-
-            public ProcessInfo(int id, string name)
-            {
-                Id = id;
-                Name = name;
-            }
-        }
+        // 进程信息结构体 - 优化内存使用
+        private readonly record struct ProcessInfo(int Id, string Name);
     }
 }

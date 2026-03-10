@@ -267,6 +267,8 @@ namespace EnergyStarZ
             if (disposing)
             {
                 UnregisterHotkeys();
+                
+                // 确保所有资源都被释放
                 trayIcon.Visible = false;
                 trayIcon.Dispose();
             }
