@@ -20,7 +20,7 @@ namespace EnergyStarZ
     // 隐藏窗体用于接收热键消息
     public partial class HiddenFormForHotkeys : Form
     {
-        public event EventHandler<HotkeyEventArgs> HotkeyPressed;
+        public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
 
         // 快捷键相关的常量
         private const int HOTKEY_ID_TOGGLE_MODE = 1001;

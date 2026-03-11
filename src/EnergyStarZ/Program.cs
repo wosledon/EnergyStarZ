@@ -7,7 +7,7 @@ namespace EnergyStarZ
 {
     internal class Program
     {
-        private static AppSettings _settings;
+        private static AppSettings _settings = null!;
         
         static async Task HouseKeepingThreadProc(AppSettings settings, CancellationToken cancellationToken)
         {

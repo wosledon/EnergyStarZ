@@ -451,9 +451,9 @@ namespace EnergyStarZ
 
         private static string GetProcessNameFromHandle(IntPtr hProcess)
         {
-            var sb = _threadLocalStringBuilder.Value;
+            var sb = _threadLocalStringBuilder.Value!;
             sb.Clear();
-            
+
             int capacity = sb.Capacity;
             if (Interop.Win32Api.QueryFullProcessImageName(hProcess, 0, sb, ref capacity))
             {

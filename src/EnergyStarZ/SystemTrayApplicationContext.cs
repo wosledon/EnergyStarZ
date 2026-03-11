@@ -15,11 +15,10 @@ namespace EnergyStarZ
 {
     public class SystemTrayApplicationContext : ApplicationContext
     {
-        private NotifyIcon trayIcon;
+        private NotifyIcon trayIcon = null!;
         private readonly AppSettings _settings;
         private readonly string _configFilePath;
         private PowerMode _currentMode = PowerMode.Auto;
-        private bool _hooksEnabled = true;
 
         // 快捷键相关的常量
         private const int HOTKEY_ID_TOGGLE_MODE = 1001;
@@ -120,7 +119,7 @@ namespace EnergyStarZ
             return menu;
         }
 
-        private void OnAutoPowerModeClick(object sender, EventArgs e)
+        private void OnAutoPowerModeClick(object? sender, EventArgs e)
         {
             var menuItem = sender as ToolStripMenuItem;
             if (menuItem != null)
@@ -194,7 +193,7 @@ namespace EnergyStarZ
             trayIcon.ShowBalloonTip(3000); // 3秒后消失
         }
 
-        private void OnEditConfigClick(object sender, EventArgs e)
+        private void OnEditConfigClick(object? sender, EventArgs e)
         {
             try
             {
@@ -207,12 +206,12 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to open config file: {ex.Message}", "Error", 
+                MessageBox.Show($"Failed to open config file: {ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void OnReloadConfigClick(object sender, EventArgs e)
+        private void OnReloadConfigClick(object? sender, EventArgs e)
         {
             try
             {
@@ -221,7 +220,7 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Failed to reload config: {ex.Message}", LocalizationManager.GetString("PowerModeChanged"), 
+                MessageBox.Show($"Failed to reload config: {ex.Message}", LocalizationManager.GetString("PowerModeChanged"),
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -256,7 +255,7 @@ namespace EnergyStarZ
             return culture.NativeName;
         }
 
-        private void OnExitClick(object sender, EventArgs e)
+        private void OnExitClick(object? sender, EventArgs e)
         {
             // 关闭应用程序
             ExitThread();
@@ -276,7 +275,7 @@ namespace EnergyStarZ
         }
 
         // 创建一个隐藏窗体来处理热键消息
-        private HiddenFormForHotkeys _hiddenFormForHotkeys;
+        private HiddenFormForHotkeys _hiddenFormForHotkeys = null!;
 
         private void InitializeHiddenFormForHotkeys()
         {
@@ -284,7 +283,7 @@ namespace EnergyStarZ
             _hiddenFormForHotkeys.HotkeyPressed += OnHotkeyPressed;
         }
 
-        private void OnHotkeyPressed(object sender, HotkeyEventArgs e)
+        private void OnHotkeyPressed(object? sender, HotkeyEventArgs e)
         {
             switch (e.HotkeyId)
             {

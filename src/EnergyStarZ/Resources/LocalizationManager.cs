@@ -5,8 +5,8 @@ namespace EnergyStarZ.Resources
 {
     public static class LocalizationManager
     {
-        private static Dictionary<string, Dictionary<string, string>> _localizedStrings;
-        private static CultureInfo _currentCulture;
+        private static Dictionary<string, Dictionary<string, string>> _localizedStrings = null!;
+        private static CultureInfo _currentCulture = null!;
 
         static LocalizationManager()
         {
@@ -18,7 +18,7 @@ namespace EnergyStarZ.Resources
         private static void LoadLocalizationData()
         {
             var jsonContent = File.ReadAllText("Resources/Localization.json");
-            var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent);
+            var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent)!;
 
             _localizedStrings = new Dictionary<string, Dictionary<string, string>>();
 
@@ -26,20 +26,23 @@ namespace EnergyStarZ.Resources
             foreach (var property in typeof(UIData).GetProperties())
             {
                 var value = property.GetValue(localizationData.UI) as Dictionary<string, string>;
-                _localizedStrings[property.Name] = value;
+                if (value != null)
+                {
+                    _localizedStrings[property.Name] = value;
+                }
             }
         }
 
         public static string GetString(string key)
         {
-            if (_localizedStrings.ContainsKey(key) && 
+            if (_localizedStrings.ContainsKey(key) &&
                 _localizedStrings[key].ContainsKey(_currentCulture.Name))
             {
                 return _localizedStrings[key][_currentCulture.Name];
             }
 
             // Fallback to en-US if the key is not found in current culture
-            if (_localizedStrings.ContainsKey(key) && 
+            if (_localizedStrings.ContainsKey(key) &&
                 _localizedStrings[key].ContainsKey("en-US"))
             {
                 return _localizedStrings[key]["en-US"];
@@ -63,8 +66,8 @@ namespace EnergyStarZ.Resources
         public static List<CultureInfo> GetSupportedCultures()
         {
             var jsonContent = File.ReadAllText("Resources/Localization.json");
-            var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent);
-            return localizationData.Language.SupportedCultures.Select(code => new CultureInfo(code)).ToList();
+            var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent)!;
+            return localizationData.Language?.SupportedCultures?.Select(code => new CultureInfo(code)).ToList() ?? [];
         }
 
         private static string GetSavedCulture()
@@ -72,8 +75,8 @@ namespace EnergyStarZ.Resources
             try
             {
                 var jsonContent = File.ReadAllText("Resources/Localization.json");
-                var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent);
-                return localizationData.Language.CurrentCulture ?? "en-US";
+                var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonContent)!;
+                return localizationData.Language?.CurrentCulture ?? "en-US";
             }
             catch
             {
@@ -87,13 +90,16 @@ namespace EnergyStarZ.Resources
             {
                 var filePath = "Resources/Localization.json";
                 var jsonString = File.ReadAllText(filePath);
-                var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonString);
+                var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonString)!;
 
-                localizationData.Language.CurrentCulture = cultureName;
+                if (localizationData.Language != null)
+                {
+                    localizationData.Language.CurrentCulture = cultureName;
 
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                var updatedJsonString = JsonSerializer.Serialize(localizationData, options);
-                File.WriteAllText(filePath, updatedJsonString);
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    var updatedJsonString = JsonSerializer.Serialize(localizationData, options);
+                    File.WriteAllText(filePath, updatedJsonString);
+                }
             }
             catch
             {
@@ -105,32 +111,32 @@ namespace EnergyStarZ.Resources
     // Data classes for deserialization
     public class LocalizationData
     {
-        public LanguageSettings Language { get; set; }
-        public UIData UI { get; set; }
+        public required LanguageSettings Language { get; set; }
+        public required UIData UI { get; set; }
     }
 
     public class LanguageSettings
     {
-        public string CurrentCulture { get; set; }
-        public List<string> SupportedCultures { get; set; }
+        public string? CurrentCulture { get; set; }
+        public required List<string> SupportedCultures { get; set; }
     }
 
     public class UIData
     {
-        public Dictionary<string, string> AutoMode { get; set; }
-        public Dictionary<string, string> ManualMode { get; set; }
-        public Dictionary<string, string> PausedMode { get; set; }
-        public Dictionary<string, string> EditConfiguration { get; set; }
-        public Dictionary<string, string> ReloadConfiguration { get; set; }
-        public Dictionary<string, string> Exit { get; set; }
-        public Dictionary<string, string> SwitchLanguage { get; set; }
-        public Dictionary<string, string> English { get; set; }
-        public Dictionary<string, string> Chinese { get; set; }
-        public Dictionary<string, string> PowerModeChanged { get; set; }
-        public Dictionary<string, string> AutoModeActivated { get; set; }
-        public Dictionary<string, string> ManualModeActivated { get; set; }
-        public Dictionary<string, string> PausedModeActivated { get; set; }
-        public Dictionary<string, string> ConfigurationReloaded { get; set; }
-        public Dictionary<string, string> ApplicationStarted { get; set; }
+        public required Dictionary<string, string> AutoMode { get; set; }
+        public required Dictionary<string, string> ManualMode { get; set; }
+        public required Dictionary<string, string> PausedMode { get; set; }
+        public required Dictionary<string, string> EditConfiguration { get; set; }
+        public required Dictionary<string, string> ReloadConfiguration { get; set; }
+        public required Dictionary<string, string> Exit { get; set; }
+        public required Dictionary<string, string> SwitchLanguage { get; set; }
+        public required Dictionary<string, string> English { get; set; }
+        public required Dictionary<string, string> Chinese { get; set; }
+        public required Dictionary<string, string> PowerModeChanged { get; set; }
+        public required Dictionary<string, string> AutoModeActivated { get; set; }
+        public required Dictionary<string, string> ManualModeActivated { get; set; }
+        public required Dictionary<string, string> PausedModeActivated { get; set; }
+        public required Dictionary<string, string> ConfigurationReloaded { get; set; }
+        public required Dictionary<string, string> ApplicationStarted { get; set; }
     }
 }
