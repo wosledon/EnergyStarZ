@@ -8,7 +8,6 @@ using System.Windows.Forms;
 using static EnergyStarZ.Interop.Win32Api;
 using EnergyStarZ.Interop;
 
-// 为处理 Windows 消息添加必要的导入
 using Message = System.Windows.Forms.Message;
 
 namespace EnergyStarZ
@@ -18,19 +17,18 @@ namespace EnergyStarZ
         private NotifyIcon trayIcon = null!;
         private readonly AppSettings _settings;
         private readonly string _configFilePath;
-        private PowerMode _currentMode = PowerMode.Auto;
 
-        // 快捷键相关的常量
         private const int HOTKEY_ID_TOGGLE_MODE = 1001;
         private const int HOTKEY_ID_PAUSE = 1002;
         private const int HOTKEY_ID_RESUME = 1003;
+
+        private HiddenFormForHotkeys? _hiddenFormForHotkeys;
 
         public SystemTrayApplicationContext(AppSettings settings)
         {
             _settings = settings;
             _configFilePath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
 
-            // 初始化系统托盘图标
             trayIcon = new NotifyIcon()
             {
                 Icon = SystemIcons.Application,
@@ -38,43 +36,41 @@ namespace EnergyStarZ
                 Text = "EnergyStarZ - Energy Efficiency Manager"
             };
 
-            // 创建右键菜单
             trayIcon.ContextMenuStrip = CreateContextMenu();
 
-            // 初始化热键处理
             InitializeHiddenFormForHotkeys();
 
-            // 显示初始通知
             ShowNotification("EnergyStarZ", LocalizationManager.GetString("ApplicationStarted"), ToolTipIcon.Info);
-        }
-
-        private void UnregisterHotkeys()
-        {
-            _hiddenFormForHotkeys?.Dispose();
         }
 
         private ContextMenuStrip CreateContextMenu()
         {
             var menu = new ContextMenuStrip();
+            var currentMode = EnergyManager.CurrentMode;
 
             var autoModeItem = new ToolStripMenuItem(LocalizationManager.GetString("AutoMode"));
-            autoModeItem.Checked = _currentMode == PowerMode.Auto;
+            autoModeItem.Checked = currentMode == PowerMode.Auto;
             autoModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Auto);
 
             var manualModeItem = new ToolStripMenuItem(LocalizationManager.GetString("ManualMode"));
-            manualModeItem.Checked = _currentMode == PowerMode.Manual;
+            manualModeItem.Checked = currentMode == PowerMode.Manual;
             manualModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Manual);
 
             var pausedModeItem = new ToolStripMenuItem(LocalizationManager.GetString("PausedMode"));
-            pausedModeItem.Checked = _currentMode == PowerMode.Paused;
+            pausedModeItem.Checked = currentMode == PowerMode.Paused;
             pausedModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Paused);
 
             var separator1 = new ToolStripSeparator();
 
-            // 语言切换子菜单
+            var autoPowerModeItem = new ToolStripMenuItem(LocalizationManager.GetString("AutoPowerMode"));
+            autoPowerModeItem.Checked = _settings.EnableAutoPowerMode;
+            autoPowerModeItem.Click += OnAutoPowerModeClick;
+
+            var separator2 = new ToolStripSeparator();
+
             var languageMenu = new ToolStripMenuItem(LocalizationManager.GetString("SwitchLanguage"));
             var supportedCultures = LocalizationManager.GetSupportedCultures();
-            
+
             foreach (var culture in supportedCultures)
             {
                 var langItem = new ToolStripMenuItem(GetLanguageDisplayName(culture))
@@ -85,7 +81,7 @@ namespace EnergyStarZ
                 languageMenu.DropDownItems.Add(langItem);
             }
 
-            var separator2 = new ToolStripSeparator();
+            var separator3 = new ToolStripSeparator();
 
             var editConfigItem = new ToolStripMenuItem(LocalizationManager.GetString("EditConfiguration"));
             editConfigItem.Click += OnEditConfigClick;
@@ -93,15 +89,10 @@ namespace EnergyStarZ
             var reloadConfigItem = new ToolStripMenuItem(LocalizationManager.GetString("ReloadConfiguration"));
             reloadConfigItem.Click += OnReloadConfigClick;
 
-            var separator3 = new ToolStripSeparator();
+            var separator4 = new ToolStripSeparator();
 
             var exitItem = new ToolStripMenuItem(LocalizationManager.GetString("Exit"));
             exitItem.Click += OnExitClick;
-
-            // 添加自动电源模式开关
-            var autoPowerModeItem = new ToolStripMenuItem("Auto Power Mode");
-            autoPowerModeItem.Checked = _settings.EnableAutoPowerMode;
-            autoPowerModeItem.Click += OnAutoPowerModeClick;
 
             menu.Items.Add(autoModeItem);
             menu.Items.Add(manualModeItem);
@@ -113,7 +104,7 @@ namespace EnergyStarZ
             menu.Items.Add(separator3);
             menu.Items.Add(editConfigItem);
             menu.Items.Add(reloadConfigItem);
-            menu.Items.Add(separator3);
+            menu.Items.Add(separator4);
             menu.Items.Add(exitItem);
 
             return menu;
@@ -127,27 +118,28 @@ namespace EnergyStarZ
                 bool enableAutoPowerMode = !menuItem.Checked;
                 menuItem.Checked = enableAutoPowerMode;
 
-                // 更新配置
                 _settings.EnableAutoPowerMode = enableAutoPowerMode;
-
-                // 更新 EnergyManager 的设置
                 EnergyManager.SetAutoPowerModeEnabled(enableAutoPowerMode);
 
                 if (enableAutoPowerMode)
                 {
-                    EnergyManager.InitializePowerStatusMonitoring();
-                    ShowNotification("Auto Power Mode", "Auto power mode enabled\nWill switch modes based on power source", ToolTipIcon.Info);
+                    ShowNotification(
+                        LocalizationManager.GetString("AutoPowerMode"),
+                        LocalizationManager.GetString("AutoPowerModeEnabled"),
+                        ToolTipIcon.Info);
                 }
                 else
                 {
-                    ShowNotification("Auto Power Mode", "Auto power mode disabled", ToolTipIcon.Info);
+                    ShowNotification(
+                        LocalizationManager.GetString("AutoPowerMode"),
+                        LocalizationManager.GetString("AutoPowerModeDisabled"),
+                        ToolTipIcon.Info);
                 }
             }
         }
 
         private void SetPowerMode(PowerMode mode)
         {
-            _currentMode = mode;
             EnergyManager.CurrentMode = mode;
 
             switch (mode)
@@ -161,20 +153,18 @@ namespace EnergyStarZ
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("ManualModeActivated"), ToolTipIcon.Info);
                     break;
                 case PowerMode.Paused:
-                    // 恢复所有已应用的效率限制
                     EnergyManager.RestoreAllProcessesToNormal();
                     Interop.HookManager.UnsubscribeWindowEvents();
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("PausedModeActivated"), ToolTipIcon.Warning);
                     break;
             }
 
-            // 刷新菜单
             trayIcon.ContextMenuStrip = CreateContextMenu();
         }
 
         private void TogglePowerMode()
         {
-            var nextMode = _currentMode switch
+            var nextMode = EnergyManager.CurrentMode switch
             {
                 PowerMode.Auto => PowerMode.Manual,
                 PowerMode.Manual => PowerMode.Paused,
@@ -190,14 +180,13 @@ namespace EnergyStarZ
             trayIcon.BalloonTipTitle = title;
             trayIcon.BalloonTipText = message;
             trayIcon.BalloonTipIcon = icon;
-            trayIcon.ShowBalloonTip(3000); // 3秒后消失
+            trayIcon.ShowBalloonTip(3000);
         }
 
         private void OnEditConfigClick(object? sender, EventArgs e)
         {
             try
             {
-                // 使用默认文本编辑器打开配置文件
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = _configFilePath,
@@ -228,21 +217,18 @@ namespace EnergyStarZ
         private void ChangeLanguage(CultureInfo culture)
         {
             LocalizationManager.SetCulture(culture);
-            
-            // 刷新菜单以应用新语言
+
             trayIcon.ContextMenuStrip = CreateContextMenu();
-            
-            // 显示通知
+
             ShowNotification(
-                LocalizationManager.GetString("PowerModeChanged"), 
-                $"Language changed to {GetLanguageDisplayName(culture)}", 
+                LocalizationManager.GetString("PowerModeChanged"),
+                $"Language changed to {GetLanguageDisplayName(culture)}",
                 ToolTipIcon.Info
             );
         }
 
         private string GetLanguageDisplayName(CultureInfo culture)
         {
-            // 根据当前语言环境显示语言名称
             var currentCulture = LocalizationManager.GetCurrentCulture();
             if (culture.Name.StartsWith("en"))
             {
@@ -257,7 +243,6 @@ namespace EnergyStarZ
 
         private void OnExitClick(object? sender, EventArgs e)
         {
-            // 关闭应用程序
             ExitThread();
         }
 
@@ -265,17 +250,14 @@ namespace EnergyStarZ
         {
             if (disposing)
             {
-                UnregisterHotkeys();
-                
-                // 确保所有资源都被释放
+                _hiddenFormForHotkeys?.Dispose();
+                _hiddenFormForHotkeys = null;
+
                 trayIcon.Visible = false;
                 trayIcon.Dispose();
             }
             base.Dispose(disposing);
         }
-
-        // 创建一个隐藏窗体来处理热键消息
-        private HiddenFormForHotkeys _hiddenFormForHotkeys = null!;
 
         private void InitializeHiddenFormForHotkeys()
         {
