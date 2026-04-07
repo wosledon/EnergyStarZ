@@ -66,6 +66,18 @@
     "ApplicationStarted": {
       "en-US": "Application started in Auto mode",
       "zh-CN": "应用程序以自动模式启动"
+    },
+    "AutoPowerMode": {
+      "en-US": "Auto Power Mode",
+      "zh-CN": "自动电源模式"
+    },
+    "AutoPowerModeEnabled": {
+      "en-US": "Auto power mode enabled\nWill switch modes based on power source",
+      "zh-CN": "自动电源模式已启用\n将根据电源来源自动切换模式"
+    },
+    "AutoPowerModeDisabled": {
+      "en-US": "Auto power mode disabled",
+      "zh-CN": "自动电源模式已禁用"
     }
   }
 }
