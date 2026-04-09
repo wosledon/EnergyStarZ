@@ -1,3 +1,4 @@
+using EnergyStarZ.Utilities;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
@@ -51,10 +52,18 @@ namespace EnergyStarZ.Interop
         public static void WindowEventCallback(IntPtr hWinEventHook, uint eventType,
             IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
         {
-            // 检查当前模式，如果处于暂停模式则不处理事件
-            if (EnergyManager.CurrentMode != PowerMode.Paused)
+            try
             {
-                EnergyManager.HandleForegroundEvent(hwnd);
+                // 检查当前模式，如果处于暂停模式则不处理事件
+                if (EnergyManager.CurrentMode != PowerMode.Paused)
+                {
+                    EnergyManager.HandleForegroundEvent(hwnd);
+                }
+            }
+            catch (Exception ex)
+            {
+                // 记录异常但不抛出，防止 Windows 移除钩子
+                AppLogger.Error($"WindowEventCallback: {ex.Message}");
             }
         }
 

@@ -1,3 +1,4 @@
+using EnergyStarZ.Utilities;
 using System;
 using System.Drawing;
 using System.Windows.Forms;
@@ -23,9 +24,9 @@ namespace EnergyStarZ
         public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
 
         // 快捷键相关的常量
-        private const int HOTKEY_ID_TOGGLE_MODE = 1001;
-        private const int HOTKEY_ID_PAUSE = 1002;
-        private const int HOTKEY_ID_RESUME = 1003;
+        public const int HotkeyIdToggleMode = 1001;
+        public const int HotkeyIdPause = 1002;
+        public const int HotkeyIdResume = 1003;
 
         public HiddenFormForHotkeys()
         {
@@ -41,14 +42,28 @@ namespace EnergyStarZ
 
         private void RegisterHotkeys()
         {
+            bool success;
+
             // 注册 Ctrl+Alt+A 切换模式
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdToggleMode, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+            if (!success)
+            {
+                AppLogger.Warn($"Failed to register hotkey Ctrl+Alt+A (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
 
             // 注册 Ctrl+Alt+P 暂停
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_PAUSE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdPause, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+            if (!success)
+            {
+                AppLogger.Warn($"Failed to register hotkey Ctrl+Alt+P (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
 
             // 注册 Ctrl+Alt+R 恢复
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_RESUME, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdResume, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
+            if (!success)
+            {
+                AppLogger.Warn($"Failed to register hotkey Ctrl+Alt+R (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
         }
 
         protected override void WndProc(ref Message m)
@@ -74,9 +89,9 @@ namespace EnergyStarZ
             if (disposing)
             {
                 // 注销热键
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE);
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_PAUSE);
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_RESUME);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdToggleMode);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdPause);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdResume);
             }
             base.Dispose(disposing);
         }

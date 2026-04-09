@@ -1,0 +1,117 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master, refactor/improvements ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  PROJECT_PATH: src/EnergyStarZ/EnergyStarZ.csproj
+  OUTPUT_DIR: publish
+
+jobs:
+  build:
+    name: Build ${{ matrix.runtime }}-${{ matrix.arch }}
+    runs-on: windows-latest
+    
+    strategy:
+      matrix:
+        include:
+          # x64 自带运行时
+          - arch: x64
+            runtime: win-x64
+            self_contained: true
+            label: x64-SelfContained
+          
+          # x64 框架依赖
+          - arch: x64
+            runtime: win-x64
+            self_contained: false
+            label: x64-FrameworkDependent
+          
+          # x86 自带运行时
+          - arch: x86
+            runtime: win-x86
+            self_contained: true
+            label: x86-SelfContained
+          
+          # x86 框架依赖
+          - arch: x86
+            runtime: win-x86
+            self_contained: false
+            label: x86-FrameworkDependent
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.PROJECT_PATH }}
+
+      - name: Build
+        run: dotnet build ${{ env.PROJECT_PATH }} -c Release --no-restore
+
+      - name: Publish
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} `
+            -c Release `
+            -r ${{ matrix.runtime }} `
+            -o "${{ env.OUTPUT_DIR }}/${{ matrix.label }}" `
+            --self-contained ${{ matrix.self_contained }} `
+            -p:PublishSingleFile=true `
+            -p:PublishTrimmed=false `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=none `
+            -p:EnableCompressionInSingleFile=true
+
+      - name: Copy config files
+        run: |
+          Copy-Item "src/EnergyStarZ/appsettings.json" "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/" -Force
+          Copy-Item "src/EnergyStarZ/Resources/Localization.json" "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/Resources/" -Force
+
+      - name: Create ZIP archive
+        run: |
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.*)') { $matches[1] } else { "dev-${{ github.sha.Substring(0,7) }}" }
+          $zipName = "EnergyStarZ-${{ matrix.label }}-$version.zip"
+          Compress-Archive -Path "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/*" -DestinationPath "${{ env.OUTPUT_DIR }}/$zipName" -Force
+          echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: ${{ env.OUTPUT_DIR }}/${{ env.ZIP_NAME }}
+          retention-days: 30
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

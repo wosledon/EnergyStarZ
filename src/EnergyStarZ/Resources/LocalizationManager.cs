@@ -1,3 +1,4 @@
+using EnergyStarZ.Utilities;
 using System.Globalization;
 using System.Text.Json;
 
@@ -14,9 +15,19 @@ namespace EnergyStarZ.Resources
 
         static LocalizationManager()
         {
-            LoadLocalizationData();
-            var cultureCode = GetSavedCulture();
-            _currentCulture = new CultureInfo(cultureCode);
+            try
+            {
+                LoadLocalizationData();
+                var cultureCode = GetSavedCulture();
+                _currentCulture = new CultureInfo(cultureCode);
+            }
+            catch (Exception ex)
+            {
+                // 如果加载失败，使用默认值，避免应用启动时崩溃
+                AppLogger.Warn($"Failed to load localization data: {ex.Message}. Using defaults.");
+                _localizedStrings = new Dictionary<string, Dictionary<string, string>>();
+                _currentCulture = new CultureInfo("en-US");
+            }
         }
 
         private static void LoadLocalizationData()
@@ -107,14 +118,19 @@ namespace EnergyStarZ.Resources
 
                         var options = new JsonSerializerOptions { WriteIndented = true };
                         var updatedJsonString = JsonSerializer.Serialize(localizationData, options);
-                        File.WriteAllText(LocalizationFilePath, updatedJsonString);
+
+                        // 原子写入：先写入临时文件，再替换原文件
+                        var tempFilePath = LocalizationFilePath + ".tmp";
+                        File.WriteAllText(tempFilePath, updatedJsonString);
+                        File.Move(tempFilePath, LocalizationFilePath, overwrite: true);
 
                         _cachedData = localizationData;
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                AppLogger.Warn($"Failed to save language preference: {ex.Message}");
                 // If saving fails, just continue with the in-memory change
             }
         }

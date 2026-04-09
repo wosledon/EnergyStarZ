@@ -1,13 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType Condition="'$(Configuration)'=='ReleaseInvisible'">WinExe</OutputType>
-    <OutputType Condition="'$(Configuration)'!='ReleaseInvisible'">Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <AllowUnsafeBlocks>False</AllowUnsafeBlocks>
     <Configurations>Debug;Release;ReleaseInvisible</Configurations>
+    <Version>1.0.0</Version>
     <AssemblyTitle>EnergyStarZ</AssemblyTitle>
     <AssemblyDescription>A high-performance energy efficiency manager for Windows</AssemblyDescription>
     <AssemblyCopyright>Copyright ©  2026</AssemblyCopyright>

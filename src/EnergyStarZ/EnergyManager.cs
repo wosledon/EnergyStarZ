@@ -5,13 +5,66 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Runtime.CompilerServices;
 using EnergyStarZ.Config;
+using EnergyStarZ.Utilities;
 using Microsoft.Extensions.Configuration;
 
 namespace EnergyStarZ
 {
-    public unsafe class EnergyManager : IDisposable
+    public class EnergyManager : IDisposable
     {
-        public static HashSet<string> BypassProcessList = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 配置常量
+        private const int DefaultSwitchDebounceMs = 500;
+        private const int MinWindowsBuild = 26100;
+        private const int ExitErrorCode = 120;
+
+        public static int RequiredWindowsBuild => MinWindowsBuild;
+        public static int ExitErrorCodeValue => ExitErrorCode;
+
+        // 硬编码最低保护列表 - 无论配置如何，这些进程永远不被节流
+        // 包含 P0 核心系统进程和部分 P1 用户体验关键进程
+        private static readonly HashSet<string> _hardcodedBypassList = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // === P0 核心系统进程 ===
+            "csrss.exe",              // Client/Server Runtime Subsystem
+            "smss.exe",               // Session Manager Subsystem
+            "wininit.exe",            // Windows 启动进程
+            "winlogon.exe",           // Windows 登录管理器
+            "lsass.exe",              // Local Security Authority Subsystem Service
+            "services.exe",           // Service Control Manager
+            "svchost.exe",            // Service Host（承载多个 Windows 服务）
+            "Registry",               // Registry hive 加载进程（无 .exe 扩展）
+
+            // === P1 显示与 Shell ===
+            "dwm.exe",                // Desktop Window Manager
+            "explorer.exe",           // Windows Shell（任务栏、文件管理器）
+            "fontdrvhost.exe",        // 字体驱动宿主进程
+            "sihost.exe",             // Shell Infrastructure Host（通知、操作中心）
+            "ShellExperienceHost.exe",// Shell 体验宿主
+            "StartMenuExperienceHost.exe", // 开始菜单
+            "SearchHost.exe",         // Windows 搜索 UI 宿主
+
+            // === P1 输入与语言 ===
+            "ctfmon.exe",             // Text Services Framework（输入法支持）
+            "ChsIME.exe",             // 中文输入法（简体）
+        };
+
+        public static IReadOnlyCollection<string> BypassProcessList
+        {
+            get
+            {
+                lock (_bypassListLock)
+                {
+                    // 合并配置列表和硬编码保护列表
+                    var mergedList = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
+                    mergedList.UnionWith(_hardcodedBypassList);
+                    return mergedList.ToList().AsReadOnly();
+                }
+            }
+        }
+
+        private static readonly object _bypassListLock = new();
+        private static HashSet<string> _bypassProcessList = new(StringComparer.OrdinalIgnoreCase);
+
         // Speical handling needs for UWP to get the child window process
         public const string UWPFrameHostApp = "ApplicationFrameHost.exe";
 
@@ -20,14 +73,21 @@ namespace EnergyStarZ
         private static readonly LinkedList<(uint pid, string name, DateTime lastAccess, int weight)> _recentlyUsedApps = new();
         private static readonly Dictionary<uint, LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>> _appLookup = new();
         private static int _lruCacheSize = 5;
+        private static int _minLRUSize = 3;
+        private static int _maxLRUSize = 15;
         private static TimeSpan _timeoutPeriod = TimeSpan.FromSeconds(30);
+        private static TimeSpan _lruDecayPeriod = TimeSpan.FromMinutes(5); // LRU 时间衰减周期
+        private static DateTime _lastLRUAdjustment = DateTime.UtcNow;
+        private static int _foregroundSwitchCount = 0; // 前台切换计数器（用于自动调整）
 
-        private static volatile uint _pendingProcPid = 0;
-        private static volatile string _pendingProcName = "";
+        private static readonly object _pendingProcLock = new();
+        private static uint _pendingProcPid = 0;
+        private static string _pendingProcName = "";
 
         private static IntPtr pThrottleOn = IntPtr.Zero;
         private static IntPtr pThrottleOff = IntPtr.Zero;
         private static int szControlBlock = 0;
+        private static bool _unmanagedResourcesInitialized = false;
 
         private static readonly ThreadLocal<StringBuilder> _threadLocalStringBuilder =
             new(() => new StringBuilder(1024));
@@ -36,8 +96,11 @@ namespace EnergyStarZ
 
         private static readonly ConcurrentDictionary<int, ProcessInfo> ProcessCache = new();
 
-        private static System.Threading.Timer? ProcessCacheRefreshTimer;
-        private static System.Threading.Timer? PowerStatusCheckTimer;
+        // 后台任务
+        private static CancellationTokenSource? _backgroundTasksCts;
+        private static Task? _processCacheRefreshTask;
+        private static Task? _powerStatusCheckTask;
+        
         private static volatile bool _isBatteryPowered = false;
         private static volatile bool _autoPowerModeEnabled = false;
 
@@ -49,57 +112,205 @@ namespace EnergyStarZ
         }
 
         private static DateTime _lastSwitchTime = DateTime.MinValue;
+        private static int _switchDebounceMs = DefaultSwitchDebounceMs;
 
-        static EnergyManager()
+        // 单例实例用于生命周期管理
+        private static EnergyManager? _instance;
+        private static readonly object _instanceLock = new();
+
+        public static EnergyManager Instance
         {
-            szControlBlock = Marshal.SizeOf<Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE>();
-            pThrottleOn = Marshal.AllocHGlobal(szControlBlock);
-            pThrottleOff = Marshal.AllocHGlobal(szControlBlock);
-
-            var throttleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+            get
             {
-                Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-                ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-                StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-            };
+                lock (_instanceLock)
+                {
+                    _instance ??= new EnergyManager();
+                    return _instance;
+                }
+            }
+        }
 
-            var unthrottleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
-            {
-                Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-                ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-                StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.None,
-            };
-
-            Marshal.StructureToPtr(throttleState, pThrottleOn, false);
-            Marshal.StructureToPtr(unthrottleState, pThrottleOff, false);
-
-            ProcessCacheRefreshTimer = new System.Threading.Timer(RefreshProcessCache, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
-            PowerStatusCheckTimer = new System.Threading.Timer(CheckPowerStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
-
+        private EnergyManager()
+        {
+            InitializeUnmanagedResources();
+            StartTimers();
             LoadConfiguration();
         }
 
         public static void LoadConfiguration()
         {
-            var config = ConfigurationHelper.LoadConfiguration();
-            var settings = ConfigurationHelper.GetAppSettings(config);
-
-            BypassProcessList = new HashSet<string>(settings.BypassProcessList, StringComparer.OrdinalIgnoreCase);
-
-            lock (_lruLock)
+            try
             {
-                _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
-                _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+                var config = ConfigurationHelper.LoadConfiguration();
+                var settings = ConfigurationHelper.GetAppSettings(config);
+
+                lock (_bypassListLock)
+                {
+                    _bypassProcessList = new HashSet<string>(settings.BypassProcessList ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+                }
+
+                lock (_lruLock)
+                {
+                    _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
+                    _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+
+                    // 加载 LRU 时间衰减配置（默认 5 分钟）
+                    if (settings.LRUDecayMinutes > 0)
+                    {
+                        _lruDecayPeriod = TimeSpan.FromMinutes(settings.LRUDecayMinutes);
+                    }
+
+                    // 加载 LRU 自动调整配置
+                    if (settings.LRUMinSize > 0 && settings.LRUMaxSize >= settings.LRUMinSize)
+                    {
+                        _minLRUSize = settings.LRUMinSize;
+                        _maxLRUSize = settings.LRUMaxSize;
+                        _lruCacheSize = Math.Clamp(_lruCacheSize, _minLRUSize, _maxLRUSize);
+                    }
+                }
+
+                _switchDebounceMs = settings.SwitchDebounceMs > 0 ? settings.SwitchDebounceMs : DefaultSwitchDebounceMs;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Failed to load configuration: {ex.Message}");
             }
         }
 
-        private static void CheckPowerStatus(object? state)
+        private void InitializeUnmanagedResources()
+        {
+            if (_unmanagedResourcesInitialized)
+                return;
+
+            try
+            {
+                szControlBlock = Marshal.SizeOf<Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE>();
+                pThrottleOn = Marshal.AllocHGlobal(szControlBlock);
+                pThrottleOff = Marshal.AllocHGlobal(szControlBlock);
+
+                var throttleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+                {
+                    Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                    ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                    StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                };
+
+                var unthrottleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+                {
+                    Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                    ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                    StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.None,
+                };
+
+                Marshal.StructureToPtr(throttleState, pThrottleOn, false);
+                Marshal.StructureToPtr(unthrottleState, pThrottleOff, false);
+
+                _unmanagedResourcesInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Failed to initialize unmanaged resources: {ex.Message}");
+                ReleaseUnmanagedResources();
+                throw;
+            }
+        }
+
+        private void StartTimers()
+        {
+            _backgroundTasksCts = new CancellationTokenSource();
+
+            _processCacheRefreshTask = Task.Run(() => RefreshProcessCacheLoop(_backgroundTasksCts.Token), _backgroundTasksCts.Token);
+            _powerStatusCheckTask = Task.Run(() => PowerStatusCheckLoop(_backgroundTasksCts.Token), _backgroundTasksCts.Token);
+        }
+
+        private static async Task RefreshProcessCacheLoop(CancellationToken cancellationToken)
+        {
+            AppLogger.Info("Process cache refresh loop started.");
+
+            int consecutiveFailures = 0;
+            const int maxFailuresBeforeBackoff = 3;
+            const int backoffSeconds = 60;
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    RefreshProcessCache();
+                    consecutiveFailures = 0; // 重置失败计数
+
+                    // 定期清理过期的 LRU 条目（每分钟一次）
+                    CleanupExpiredApps();
+                }
+                catch (Exception ex)
+                {
+                    consecutiveFailures++;
+                    AppLogger.Error($"RefreshProcessCache (failure {consecutiveFailures}): {ex.Message}");
+
+                    // 连续失败后退避
+                    if (consecutiveFailures >= maxFailuresBeforeBackoff)
+                    {
+                        AppLogger.Warn($"Too many failures, backing off for {backoffSeconds}s");
+                        await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
+                        consecutiveFailures = 0;
+                        continue;
+                    }
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            AppLogger.Info("Process cache refresh loop stopped.");
+        }
+
+        private static async Task PowerStatusCheckLoop(CancellationToken cancellationToken)
+        {
+            AppLogger.Info("Power status check loop started.");
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    CheckPowerStatus();
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error($"CheckPowerStatus: {ex.Message}");
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            AppLogger.Info("Power status check loop stopped.");
+        }
+
+        private static void CheckPowerStatus()
         {
             if (!_autoPowerModeEnabled)
                 return;
 
             var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
+
+            // 防抖：避免电池/AC 快速切换时频繁触发
+            var timeSinceLastSwitch = DateTime.UtcNow - _lastSwitchTime;
+            if (timeSinceLastSwitch < TimeSpan.FromSeconds(10))
+            {
+                return;
+            }
 
             if (isOnBattery != _isBatteryPowered)
             {
@@ -109,14 +320,16 @@ namespace EnergyStarZ
                 {
                     CurrentMode = PowerMode.Auto;
                     HookManager.SubscribeToWindowEvents();
-                    Console.WriteLine("[POWER STATUS] Switched to Battery Mode - Automatic energy saving enabled");
+                    AppLogger.Info("Switched to Battery Mode - Automatic energy saving enabled");
                 }
                 else
                 {
                     CurrentMode = PowerMode.Paused;
                     HookManager.UnsubscribeWindowEvents();
-                    Console.WriteLine("[POWER STATUS] Switched to AC Mode - Energy saving paused");
+                    AppLogger.Info("Switched to AC Mode - Energy saving paused");
                 }
+
+                _lastSwitchTime = DateTime.UtcNow;
             }
         }
 
@@ -130,7 +343,51 @@ namespace EnergyStarZ
             Dispose(false);
         }
 
-        // LRU缓存管理方法
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // 取消后台任务
+                _backgroundTasksCts?.Cancel();
+                
+                try
+                {
+                    // 等待任务完成（最多等待 5 秒）
+                    var tasks = new List<Task>();
+                    if (_processCacheRefreshTask != null) tasks.Add(_processCacheRefreshTask);
+                    if (_powerStatusCheckTask != null) tasks.Add(_powerStatusCheckTask);
+                    
+                    if (tasks.Count > 0)
+                    {
+                        Task.WhenAll(tasks).Wait(TimeSpan.FromSeconds(5));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Warn($"Error waiting for background tasks: {ex.Message}");
+                }
+                finally
+                {
+                    _backgroundTasksCts?.Dispose();
+                    _backgroundTasksCts = null;
+                }
+
+                ProcessCache.Clear();
+                lock (_lruLock)
+                {
+                    _recentlyUsedApps.Clear();
+                    _appLookup.Clear();
+                }
+            }
+
+            ReleaseUnmanagedResources();
+        }
         private static void AddOrUpdateApp(uint pid, string name)
         {
             lock (_lruLock)
@@ -156,6 +413,12 @@ namespace EnergyStarZ
                 var newNode = new LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>((pid, name, now, newWeight));
                 _recentlyUsedApps.AddFirst(newNode);
                 _appLookup[pid] = newNode;
+
+                // 增加前台切换计数
+                _foregroundSwitchCount++;
+
+                // 检查是否需要自动调整 LRU 大小
+                AutoAdjustLRUSize(now);
             }
         }
 
@@ -193,7 +456,8 @@ namespace EnergyStarZ
                 {
                     var prevNode = node.Previous;
 
-                    if ((now - node.Value.lastAccess) > _timeoutPeriod)
+                    // 时间衰减：超过 5 分钟未访问则移除
+                    if ((now - node.Value.lastAccess) > _lruDecayPeriod)
                     {
                         _appLookup.Remove(node.Value.pid);
                         _recentlyUsedApps.Remove(node);
@@ -204,8 +468,78 @@ namespace EnergyStarZ
             }
         }
 
+        /// <summary>
+        /// 自动调整 LRU 缓存大小
+        /// 根据前台切换频率动态调整：切换频繁则增大，否则缩小
+        /// </summary>
+        private static void AutoAdjustLRUSize(DateTime now)
+        {
+            // 每 2 分钟检查一次
+            if ((now - _lastLRUAdjustment).TotalMinutes < 2)
+                return;
+
+            lock (_lruLock)
+            {
+                var elapsedMinutes = (now - _lastLRUAdjustment).TotalMinutes;
+                var switchesPerMinute = _foregroundSwitchCount / Math.Max(1, elapsedMinutes);
+
+                int targetSize;
+
+                if (switchesPerMinute > 10)
+                {
+                    // 高频切换用户（>10 次/分钟）：增大 LRU
+                    targetSize = Math.Min(_maxLRUSize, _lruCacheSize + 2);
+                }
+                else if (switchesPerMinute > 5)
+                {
+                    // 中频切换用户（5-10 次/分钟）：保持当前大小
+                    targetSize = _lruCacheSize;
+                }
+                else
+                {
+                    // 低频切换用户（<5 次/分钟）：缩小 LRU
+                    targetSize = Math.Max(_minLRUSize, _lruCacheSize - 1);
+                }
+
+                // 如果 LRU 中实际应用数量很少，也缩小
+                var activeAppCount = _recentlyUsedApps.Count;
+                if (activeAppCount < _lruCacheSize / 2 && _lruCacheSize > _minLRUSize)
+                {
+                    targetSize = Math.Max(_minLRUSize, activeAppCount + 1);
+                }
+
+                if (targetSize != _lruCacheSize)
+                {
+                    AppLogger.Info($"Auto-adjusting LRU size from {_lruCacheSize} to {targetSize} (switches/min: {switchesPerMinute:F1}, active apps: {activeAppCount})");
+                    _lruCacheSize = targetSize;
+
+                    // 如果缩小，淘汰最旧的条目
+                    while (_recentlyUsedApps.Count > _lruCacheSize)
+                    {
+                        var oldestNode = _recentlyUsedApps.Last;
+                        if (oldestNode != null)
+                        {
+                            _appLookup.Remove(oldestNode.Value.pid);
+                            _recentlyUsedApps.RemoveLast();
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                // 重置计数器
+                _foregroundSwitchCount = 0;
+                _lastLRUAdjustment = now;
+            }
+        }
+
         private static void ReleaseUnmanagedResources()
         {
+            if (!_unmanagedResourcesInitialized)
+                return;
+
             if (pThrottleOn != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(pThrottleOn);
@@ -216,30 +550,8 @@ namespace EnergyStarZ
                 Marshal.FreeHGlobal(pThrottleOff);
                 pThrottleOff = IntPtr.Zero;
             }
-        }
 
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        private void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                ProcessCacheRefreshTimer?.Dispose();
-                PowerStatusCheckTimer?.Dispose();
-
-                ProcessCache.Clear();
-                lock (_lruLock)
-                {
-                    _recentlyUsedApps.Clear();
-                    _appLookup.Clear();
-                }
-            }
-
-            ReleaseUnmanagedResources();
+            _unmanagedResourcesInitialized = false;
         }
 
         private static void ToggleEfficiencyMode(IntPtr hProcess, bool enable)
@@ -259,71 +571,105 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error applying efficiency mode to process: {ex.Message}");
+                AppLogger.Error($"Error applying efficiency mode to process: {ex.Message}");
             }
         }
 
-        private static void RefreshProcessCache(object? state)
+        private static void RefreshProcessCache()
         {
+            Process[]? processes = null;
             try
             {
-                var processes = Process.GetProcesses();
-                var activeIds = new HashSet<int>(processes.Length);
+                processes = Process.GetProcesses();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Failed to get processes: {ex.Message}");
+                return;
+            }
 
+            var activeIds = new HashSet<int>(processes.Length);
+
+            try
+            {
                 foreach (var proc in processes)
                 {
-                    if (proc.SessionId != CurrentSessionId)
+                    try
                     {
-                        proc.Dispose();
-                        continue;
-                    }
-
-                    activeIds.Add(proc.Id);
-
-                    if (!ProcessCache.ContainsKey(proc.Id))
-                    {
-                        ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, proc.ProcessName + ".exe"));
-                    }
-                    else
-                    {
-                        var existing = ProcessCache[proc.Id];
-                        if (existing.Name != proc.ProcessName + ".exe")
+                        if (proc.SessionId != CurrentSessionId)
                         {
-                            ProcessCache[proc.Id] = new ProcessInfo(proc.Id, proc.ProcessName + ".exe");
+                            continue;
+                        }
+
+                        activeIds.Add(proc.Id);
+
+                        var procName = proc.ProcessName + ".exe";
+                        if (!ProcessCache.ContainsKey(proc.Id))
+                        {
+                            ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, procName));
+                        }
+                        else
+                        {
+                            var existing = ProcessCache[proc.Id];
+                            if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                ProcessCache[proc.Id] = new ProcessInfo(proc.Id, procName);
+                            }
                         }
                     }
-                }
-
-                foreach (var kvp in ProcessCache)
-                {
-                    if (!activeIds.Contains(kvp.Key))
+                    catch
                     {
-                        ProcessCache.TryRemove(kvp.Key, out _);
+                        // 忽略单个进程的异常
+                    }
+                    finally
+                    {
+                        proc.Dispose();
                     }
                 }
-
+            }
+            finally
+            {
                 foreach (var proc in processes)
                 {
                     proc.Dispose();
                 }
             }
-            catch (Exception ex)
+
+            foreach (var kvp in ProcessCache)
             {
-                Console.WriteLine($"Error refreshing process cache: {ex.Message}");
+                if (!activeIds.Contains(kvp.Key))
+                {
+                    ProcessCache.TryRemove(kvp.Key, out _);
+                }
             }
         }
 
         /// <summary>
         /// 对指定进程列表应用效率模式，排除白名单和指定的前台/待处理进程
+        /// LRU 缓存中的应用会被优先恢复（不被节流）
         /// </summary>
         private static void ApplyEfficiencyMode(IEnumerable<ProcessInfo> processes, uint excludePid1, uint excludePid2 = 0)
         {
-            foreach (var procInfo in processes)
+            var processSnapshot = processes.ToList();
+
+            foreach (var procInfo in processSnapshot)
             {
                 if (procInfo.Id == excludePid1 || procInfo.Id == excludePid2)
                     continue;
-                if (BypassProcessList.Contains(procInfo.Name))
+
+                // 检查保护列表（系统进程）
+                lock (_bypassListLock)
+                {
+                    if (_bypassProcessList.Contains(procInfo.Name))
+                        continue;
+                }
+
+                // 检查 LRU 缓存（最近使用的应用优先恢复）
+                if (IsAppInRecentList((uint)procInfo.Id))
+                {
+                    // LRU 中的应用：恢复或保持不节流
                     continue;
+                }
 
                 var hProcess = Interop.Win32Api.OpenProcess(
                     (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
@@ -336,6 +682,10 @@ namespace EnergyStarZ
                     try
                     {
                         ToggleEfficiencyMode(hProcess, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error($"ApplyEfficiencyMode failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
                     }
                     finally
                     {
@@ -350,31 +700,52 @@ namespace EnergyStarZ
             if (CurrentMode == PowerMode.Paused)
                 return;
 
-            ApplyEfficiencyMode(ProcessCache.Values, _pendingProcPid);
+            uint currentPendingPid;
+            lock (_pendingProcLock)
+            {
+                currentPendingPid = _pendingProcPid;
+            }
+
+            ApplyEfficiencyMode(ProcessCache.Values, currentPendingPid);
         }
 
-        public static void RestoreAllProcessesToNormal()
+        public static async Task RestoreAllProcessesToNormalAsync()
         {
-            foreach (var procInfo in ProcessCache.Values)
-            {
-                var hProcess = Interop.Win32Api.OpenProcess(
-                    (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
-                    false,
-                    (uint)procInfo.Id);
+            var processSnapshot = ProcessCache.Values.ToList();
 
-                if (hProcess != IntPtr.Zero)
+            await Task.Run(() =>
+            {
+                foreach (var procInfo in processSnapshot)
                 {
-                    try
+                    var hProcess = Interop.Win32Api.OpenProcess(
+                        (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
+                               Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                        false,
+                        (uint)procInfo.Id);
+
+                    if (hProcess != IntPtr.Zero)
                     {
-                        ToggleEfficiencyMode(hProcess, false);
-                    }
-                    finally
-                    {
-                        Interop.Win32Api.CloseHandle(hProcess);
+                        try
+                        {
+                            ToggleEfficiencyMode(hProcess, false);
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error($"RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
+                        }
+                        finally
+                        {
+                            Interop.Win32Api.CloseHandle(hProcess);
+                        }
                     }
                 }
-            }
+            });
+        }
+
+        [Obsolete("Use RestoreAllProcessesToNormalAsync instead")]
+        public static void RestoreAllProcessesToNormal()
+        {
+            RestoreAllProcessesToNormalAsync().GetAwaiter().GetResult();
         }
 
         private static string GetProcessNameFromHandle(IntPtr hProcess)
@@ -394,17 +765,21 @@ namespace EnergyStarZ
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsBypassProcess(ReadOnlySpan<char> processName)
         {
-            foreach (var bypassProcess in BypassProcessList)
+            // 首先检查硬编码保护列表（最高优先级）- O(1) HashSet 查找
+            var processNameStr = processName.ToString();
+            if (_hardcodedBypassList.Contains(processNameStr))
             {
-                if (processName.Equals(bypassProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return true;
             }
-            return false;
+
+            // 然后检查配置列表 - O(1) HashSet 查找
+            lock (_bypassListLock)
+            {
+                return _bypassProcessList.Contains(processNameStr, StringComparer.OrdinalIgnoreCase);
+            }
         }
 
-        public static unsafe void HandleForegroundEvent(IntPtr hwnd)
+        public static void HandleForegroundEvent(IntPtr hwnd)
         {
             if (CurrentMode == PowerMode.Paused)
                 return;
@@ -416,60 +791,88 @@ namespace EnergyStarZ
                 (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation | Interop.Win32Api.ProcessAccessFlags.SetInformation), false, procId);
             if (procHandle == IntPtr.Zero) return;
 
+            bool childHandleReplaced = false;
             try
             {
                 var appName = GetProcessNameFromHandle(procHandle);
+                uint actualProcId = procId;
+                IntPtr actualProcHandle = procHandle;
 
                 // UWP needs to be handled in a special case
                 if (appName.Equals(UWPFrameHostApp, StringComparison.OrdinalIgnoreCase))
                 {
-                    var found = false;
+                    UwpChildProcessInfo? childProcessInfo = null;
+
                     Interop.Win32Api.EnumChildWindows(hwnd, (innerHwnd, lparam) =>
                     {
-                        if (found) return true;
+                        if (childProcessInfo.HasValue) return false;
+
                         if (Interop.Win32Api.GetWindowThreadProcessId(innerHwnd, out uint innerProcId) > 0)
                         {
-                            if (procId == innerProcId) return true;
+                            if (actualProcId == innerProcId) return true;
 
-                            var innerProcHandle = Interop.Win32Api.OpenProcess((uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation |
-                                Interop.Win32Api.ProcessAccessFlags.SetInformation), false, innerProcId);
+                            var innerProcHandle = Interop.Win32Api.OpenProcess(
+                                (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation | Interop.Win32Api.ProcessAccessFlags.SetInformation),
+                                false, innerProcId);
                             if (innerProcHandle == IntPtr.Zero) return true;
 
-                            found = true;
-                            Interop.Win32Api.CloseHandle(procHandle);
-                            procHandle = innerProcHandle;
-                            procId = innerProcId;
-                            appName = GetProcessNameFromHandle(procHandle);
+                            var innerAppName = GetProcessNameFromHandle(innerProcHandle);
+                            childProcessInfo = new UwpChildProcessInfo(innerProcId, innerProcHandle, innerAppName);
+                            return false;
                         }
 
                         return true;
                     }, IntPtr.Zero);
+
+                    if (childProcessInfo.HasValue)
+                    {
+                        Interop.Win32Api.CloseHandle(actualProcHandle);
+                        actualProcHandle = childProcessInfo.Value.Handle;
+                        actualProcId = childProcessInfo.Value.Pid;
+                        appName = childProcessInfo.Value.Name;
+                        childHandleReplaced = true;
+                    }
                 }
 
                 var currentTime = DateTime.UtcNow;
                 var timeSinceLastSwitch = currentTime - _lastSwitchTime;
 
-                // Boost the current foreground app
-                var bypass = IsBypassProcess(appName.AsSpan());
-                if (!bypass)
+                // 检查是否为受保护进程（系统进程）
+                var isProtected = IsBypassProcess(appName.AsSpan());
+
+                // 只有非受保护的用户应用才记录到 LRU 缓存
+                if (!isProtected)
                 {
-                    Console.WriteLine($"Boost {appName}");
-                    ToggleEfficiencyMode(procHandle, false);
+                    AddOrUpdateApp(actualProcId, appName);
+
+                    // Boost the current foreground app
+                    AppLogger.Info($"[FOREGROUND] Boost {appName}");
+                    ToggleEfficiencyMode(actualProcHandle, false);
+                }
+                else
+                {
+                    AppLogger.Info($"[FOREGROUND] Skip protected process: {appName}");
                 }
 
                 // 防抖：距离上次切换太近则跳过
-                if (timeSinceLastSwitch < TimeSpan.FromMilliseconds(500))
+                if (timeSinceLastSwitch < TimeSpan.FromMilliseconds(_switchDebounceMs))
                 {
-                    UpdateAppAccessTime(procId);
+                    UpdateAppAccessTime(actualProcId);
                     return;
                 }
 
                 // 对之前的前台应用应用效率限制
-                var prevPid = _pendingProcPid;
-                if (prevPid != 0 && prevPid != procId)
+                uint prevPid;
+                lock (_pendingProcLock)
                 {
-                    var prevProcHandle = Interop.Win32Api.OpenProcess((uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation), false, prevPid);
+                    prevPid = _pendingProcPid;
+                }
+
+                if (prevPid != 0 && prevPid != actualProcId)
+                {
+                    var prevProcHandle = Interop.Win32Api.OpenProcess(
+                        (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation | Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                        false, prevPid);
                     if (prevProcHandle != IntPtr.Zero)
                     {
                         try
@@ -477,9 +880,13 @@ namespace EnergyStarZ
                             var prevAppName = GetProcessNameFromHandle(prevProcHandle);
                             if (!string.IsNullOrEmpty(prevAppName) && !IsBypassProcess(prevAppName.AsSpan()))
                             {
-                                Console.WriteLine($"Throttle {prevAppName}");
+                                AppLogger.Info($"[BACKGROUND] Throttle {prevAppName}");
                                 ToggleEfficiencyMode(prevProcHandle, true);
                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error($"Failed to throttle previous process: {ex.Message}");
                         }
                         finally
                         {
@@ -489,17 +896,28 @@ namespace EnergyStarZ
                 }
 
                 // 对其他后台进程应用效率限制
-                ApplyEfficiencyMode(ProcessCache.Values, procId, prevPid);
+                // 优先恢复 LRU 缓存中的应用
+                ApplyEfficiencyMode(ProcessCache.Values, actualProcId, prevPid);
 
                 _lastSwitchTime = currentTime;
-                _pendingProcPid = procId;
-                _pendingProcName = appName;
+                lock (_pendingProcLock)
+                {
+                    _pendingProcPid = actualProcId;
+                    _pendingProcName = appName;
+                }
             }
             finally
             {
-                Interop.Win32Api.CloseHandle(procHandle);
+                // 如果使用了子进程句柄，原句柄已关闭，但子句柄不应再关闭
+                // 如果没使用子进程句柄，原句柄需要关闭
+                if (!childHandleReplaced)
+                {
+                    Interop.Win32Api.CloseHandle(procHandle);
+                }
             }
         }
+
+        private readonly record struct UwpChildProcessInfo(uint Pid, IntPtr Handle, string Name);
 
         private readonly record struct ProcessInfo(int Id, string Name);
     }
