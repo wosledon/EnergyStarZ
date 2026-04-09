@@ -23,8 +23,7 @@ namespace EnergyStarZ
                     {
                         await houseKeepingTimer.WaitForNextTickAsync(cancellationToken);
 
-                        await Task.Delay(TimeSpan.FromSeconds(settings.ThrottleDelaySeconds), cancellationToken);
-
+                        // PeriodicTimer 已经提供了准确的间隔，不需要额外的 Delay
                         EnergyManager.ThrottleAllUserBackgroundProcesses();
                     }
                     catch (OperationCanceledException)

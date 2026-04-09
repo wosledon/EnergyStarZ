@@ -41,14 +41,28 @@ namespace EnergyStarZ
 
         private void RegisterHotkeys()
         {
+            bool success;
+
             // 注册 Ctrl+Alt+A 切换模式
-            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdToggleMode, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdToggleMode, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+            if (!success)
+            {
+                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to register hotkey Ctrl+Alt+A (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
 
             // 注册 Ctrl+Alt+P 暂停
-            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdPause, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdPause, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+            if (!success)
+            {
+                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to register hotkey Ctrl+Alt+P (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
 
             // 注册 Ctrl+Alt+R 恢复
-            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdResume, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
+            success = Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdResume, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
+            if (!success)
+            {
+                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to register hotkey Ctrl+Alt+R (error: {System.Runtime.InteropServices.Marshal.GetLastWin32Error()})");
+            }
         }
 
         protected override void WndProc(ref Message m)

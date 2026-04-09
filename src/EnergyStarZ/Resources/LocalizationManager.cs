@@ -107,14 +107,19 @@ namespace EnergyStarZ.Resources
 
                         var options = new JsonSerializerOptions { WriteIndented = true };
                         var updatedJsonString = JsonSerializer.Serialize(localizationData, options);
-                        File.WriteAllText(LocalizationFilePath, updatedJsonString);
+
+                        // 原子写入：先写入临时文件，再替换原文件
+                        var tempFilePath = LocalizationFilePath + ".tmp";
+                        File.WriteAllText(tempFilePath, updatedJsonString);
+                        File.Move(tempFilePath, LocalizationFilePath, overwrite: true);
 
                         _cachedData = localizationData;
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to save language preference: {ex.Message}");
                 // If saving fails, just continue with the in-memory change
             }
         }

@@ -23,13 +23,14 @@ namespace EnergyStarZ
         public SystemTrayApplicationContext(AppSettings settings)
         {
             _settings = settings;
-            _configFilePath = Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json");
+            // 使用应用程序基目录，更可靠
+            _configFilePath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
 
             trayIcon = new NotifyIcon()
             {
                 Icon = SystemIcons.Application,
                 Visible = true,
-                Text = "EnergyStarZ - Energy Efficiency Manager"
+                Text = GetTrayIconText()
             };
 
             trayIcon.ContextMenuStrip = CreateContextMenu();
@@ -155,7 +156,37 @@ namespace EnergyStarZ
                     break;
             }
 
-            trayIcon.ContextMenuStrip = CreateContextMenu();
+            // 更新托盘图标文本和菜单状态
+            trayIcon.Text = GetTrayIconText();
+            UpdateMenuCheckStates();
+        }
+
+        private string GetTrayIconText()
+        {
+            var mode = EnergyManager.CurrentMode switch
+            {
+                PowerMode.Auto => "Auto",
+                PowerMode.Manual => "Manual",
+                PowerMode.Paused => "Paused",
+                _ => "Unknown"
+            };
+            return $"EnergyStarZ - Mode: {mode}";
+        }
+
+        private void UpdateMenuCheckStates()
+        {
+            if (trayIcon.ContextMenuStrip == null) return;
+
+            var menu = trayIcon.ContextMenuStrip;
+            var currentMode = EnergyManager.CurrentMode;
+
+            // 假设前 3 个 item 是模式选项
+            if (menu.Items.Count >= 3)
+            {
+                if (menu.Items[0] is ToolStripMenuItem autoItem) autoItem.Checked = currentMode == PowerMode.Auto;
+                if (menu.Items[1] is ToolStripMenuItem manualItem) manualItem.Checked = currentMode == PowerMode.Manual;
+                if (menu.Items[2] is ToolStripMenuItem pausedItem) pausedItem.Checked = currentMode == PowerMode.Paused;
+            }
         }
 
         private void TogglePowerMode()

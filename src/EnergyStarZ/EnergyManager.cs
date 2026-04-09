@@ -226,18 +226,33 @@ namespace EnergyStarZ
         {
             Console.WriteLine($"[{DateTime.UtcNow:O}] Process cache refresh loop started.");
 
+            int consecutiveFailures = 0;
+            const int maxFailuresBeforeBackoff = 3;
+            const int backoffSeconds = 60;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
                     RefreshProcessCache();
+                    consecutiveFailures = 0; // 重置失败计数
 
                     // 定期清理过期的 LRU 条目（每分钟一次）
                     CleanupExpiredApps();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RefreshProcessCache: {ex.Message}");
+                    consecutiveFailures++;
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RefreshProcessCache (failure {consecutiveFailures}): {ex.Message}");
+
+                    // 连续失败后退避
+                    if (consecutiveFailures >= maxFailuresBeforeBackoff)
+                    {
+                        Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Too many failures, backing off for {backoffSeconds}s");
+                        await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
+                        consecutiveFailures = 0;
+                        continue;
+                    }
                 }
 
                 try
@@ -289,6 +304,13 @@ namespace EnergyStarZ
             var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
 
+            // 防抖：避免电池/AC 快速切换时频繁触发
+            var timeSinceLastSwitch = DateTime.UtcNow - _lastSwitchTime;
+            if (timeSinceLastSwitch < TimeSpan.FromSeconds(10))
+            {
+                return;
+            }
+
             if (isOnBattery != _isBatteryPowered)
             {
                 _isBatteryPowered = isOnBattery;
@@ -305,6 +327,8 @@ namespace EnergyStarZ
                     HookManager.UnsubscribeWindowEvents();
                     Console.WriteLine($"[{DateTime.UtcNow:O}] [POWER STATUS] Switched to AC Mode - Energy saving paused");
                 }
+
+                _lastSwitchTime = DateTime.UtcNow;
             }
         }
 
