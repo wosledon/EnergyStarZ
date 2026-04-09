@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Runtime.CompilerServices;
 using EnergyStarZ.Config;
+using EnergyStarZ.Utilities;
 using Microsoft.Extensions.Configuration;
 
 namespace EnergyStarZ
@@ -172,7 +173,7 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Failed to load configuration: {ex.Message}");
+                AppLogger.Error($"Failed to load configuration: {ex.Message}");
             }
         }
 
@@ -208,7 +209,7 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Failed to initialize unmanaged resources: {ex.Message}");
+                AppLogger.Error($"Failed to initialize unmanaged resources: {ex.Message}");
                 ReleaseUnmanagedResources();
                 throw;
             }
@@ -224,7 +225,7 @@ namespace EnergyStarZ
 
         private static async Task RefreshProcessCacheLoop(CancellationToken cancellationToken)
         {
-            Console.WriteLine($"[{DateTime.UtcNow:O}] Process cache refresh loop started.");
+            AppLogger.Info("Process cache refresh loop started.");
 
             int consecutiveFailures = 0;
             const int maxFailuresBeforeBackoff = 3;
@@ -243,12 +244,12 @@ namespace EnergyStarZ
                 catch (Exception ex)
                 {
                     consecutiveFailures++;
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RefreshProcessCache (failure {consecutiveFailures}): {ex.Message}");
+                    AppLogger.Error($"RefreshProcessCache (failure {consecutiveFailures}): {ex.Message}");
 
                     // 连续失败后退避
                     if (consecutiveFailures >= maxFailuresBeforeBackoff)
                     {
-                        Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Too many failures, backing off for {backoffSeconds}s");
+                        AppLogger.Warn($"Too many failures, backing off for {backoffSeconds}s");
                         await Task.Delay(TimeSpan.FromSeconds(backoffSeconds), cancellationToken);
                         consecutiveFailures = 0;
                         continue;
@@ -265,12 +266,12 @@ namespace EnergyStarZ
                 }
             }
 
-            Console.WriteLine($"[{DateTime.UtcNow:O}] Process cache refresh loop stopped.");
+            AppLogger.Info("Process cache refresh loop stopped.");
         }
 
         private static async Task PowerStatusCheckLoop(CancellationToken cancellationToken)
         {
-            Console.WriteLine($"[{DateTime.UtcNow:O}] Power status check loop started.");
+            AppLogger.Info("Power status check loop started.");
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -280,7 +281,7 @@ namespace EnergyStarZ
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] CheckPowerStatus: {ex.Message}");
+                    AppLogger.Error($"CheckPowerStatus: {ex.Message}");
                 }
 
                 try
@@ -293,7 +294,7 @@ namespace EnergyStarZ
                 }
             }
 
-            Console.WriteLine($"[{DateTime.UtcNow:O}] Power status check loop stopped.");
+            AppLogger.Info("Power status check loop stopped.");
         }
 
         private static void CheckPowerStatus()
@@ -319,13 +320,13 @@ namespace EnergyStarZ
                 {
                     CurrentMode = PowerMode.Auto;
                     HookManager.SubscribeToWindowEvents();
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [POWER STATUS] Switched to Battery Mode - Automatic energy saving enabled");
+                    AppLogger.Info("Switched to Battery Mode - Automatic energy saving enabled");
                 }
                 else
                 {
                     CurrentMode = PowerMode.Paused;
                     HookManager.UnsubscribeWindowEvents();
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [POWER STATUS] Switched to AC Mode - Energy saving paused");
+                    AppLogger.Info("Switched to AC Mode - Energy saving paused");
                 }
 
                 _lastSwitchTime = DateTime.UtcNow;
@@ -369,7 +370,7 @@ namespace EnergyStarZ
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [WARNING] Error waiting for background tasks: {ex.Message}");
+                    AppLogger.Warn($"Error waiting for background tasks: {ex.Message}");
                 }
                 finally
                 {
@@ -509,7 +510,7 @@ namespace EnergyStarZ
 
                 if (targetSize != _lruCacheSize)
                 {
-                    Console.WriteLine($"[{now:O}] [LRU] Auto-adjusting LRU size from {_lruCacheSize} to {targetSize} (switches/min: {switchesPerMinute:F1}, active apps: {activeAppCount})");
+                    AppLogger.Info($"Auto-adjusting LRU size from {_lruCacheSize} to {targetSize} (switches/min: {switchesPerMinute:F1}, active apps: {activeAppCount})");
                     _lruCacheSize = targetSize;
 
                     // 如果缩小，淘汰最旧的条目
@@ -570,7 +571,7 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error applying efficiency mode to process: {ex.Message}");
+                AppLogger.Error($"Error applying efficiency mode to process: {ex.Message}");
             }
         }
 
@@ -583,7 +584,7 @@ namespace EnergyStarZ
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] Failed to get processes: {ex.Message}");
+                AppLogger.Error($"Failed to get processes: {ex.Message}");
                 return;
             }
 
@@ -684,7 +685,7 @@ namespace EnergyStarZ
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] ApplyEfficiencyMode failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
+                        AppLogger.Error($"ApplyEfficiencyMode failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
                     }
                     finally
                     {
@@ -730,7 +731,7 @@ namespace EnergyStarZ
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
+                            AppLogger.Error($"RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
                         }
                         finally
                         {
@@ -845,12 +846,12 @@ namespace EnergyStarZ
                     AddOrUpdateApp(actualProcId, appName);
 
                     // Boost the current foreground app
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [FOREGROUND] Boost {appName}");
+                    AppLogger.Info($"[FOREGROUND] Boost {appName}");
                     ToggleEfficiencyMode(actualProcHandle, false);
                 }
                 else
                 {
-                    Console.WriteLine($"[{DateTime.UtcNow:O}] [FOREGROUND] Skip protected process: {appName}");
+                    AppLogger.Info($"[FOREGROUND] Skip protected process: {appName}");
                 }
 
                 // 防抖：距离上次切换太近则跳过
@@ -879,13 +880,13 @@ namespace EnergyStarZ
                             var prevAppName = GetProcessNameFromHandle(prevProcHandle);
                             if (!string.IsNullOrEmpty(prevAppName) && !IsBypassProcess(prevAppName.AsSpan()))
                             {
-                                Console.WriteLine($"[{DateTime.UtcNow:O}] [BACKGROUND] Throttle {prevAppName}");
+                                AppLogger.Info($"[BACKGROUND] Throttle {prevAppName}");
                                 ToggleEfficiencyMode(prevProcHandle, true);
                             }
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] Failed to throttle previous process: {ex.Message}");
+                            AppLogger.Error($"Failed to throttle previous process: {ex.Message}");
                         }
                         finally
                         {

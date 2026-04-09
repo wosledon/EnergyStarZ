@@ -1,3 +1,4 @@
+using EnergyStarZ.Utilities;
 using System.Globalization;
 using System.Text.Json;
 
@@ -23,7 +24,7 @@ namespace EnergyStarZ.Resources
             catch (Exception ex)
             {
                 // 如果加载失败，使用默认值，避免应用启动时崩溃
-                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to load localization data: {ex.Message}. Using defaults.");
+                AppLogger.Warn($"Failed to load localization data: {ex.Message}. Using defaults.");
                 _localizedStrings = new Dictionary<string, Dictionary<string, string>>();
                 _currentCulture = new CultureInfo("en-US");
             }
@@ -129,7 +130,7 @@ namespace EnergyStarZ.Resources
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.UtcNow:O}] [WARN] Failed to save language preference: {ex.Message}");
+                AppLogger.Warn($"Failed to save language preference: {ex.Message}");
                 // If saving fails, just continue with the in-memory change
             }
         }

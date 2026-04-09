@@ -1,5 +1,6 @@
 ﻿using EnergyStarZ.Interop;
 using EnergyStarZ.Config;
+using EnergyStarZ.Utilities;
 using Microsoft.Extensions.Configuration;
 using System.Windows.Forms;
 
@@ -11,7 +12,7 @@ namespace EnergyStarZ
 
         static async Task HouseKeepingThreadProc(AppSettings settings, CancellationToken cancellationToken)
         {
-            Console.WriteLine($"[{DateTime.UtcNow:O}] House keeping thread started.");
+            AppLogger.Info("House keeping thread started.");
 
             try
             {
@@ -34,7 +35,7 @@ namespace EnergyStarZ
                     {
                         if (settings.EnableLogging)
                         {
-                            Console.WriteLine($"[{DateTime.UtcNow:O}] Housekeeping error: {ex.Message}");
+                            AppLogger.Error($"Housekeeping error: {ex.Message}");
                         }
                     }
                 }
@@ -58,9 +59,11 @@ namespace EnergyStarZ
             // In .NET 5.0 and later, System.Environment.OSVersion always returns the actual OS version.
             if (Environment.OSVersion.Version.Build < EnergyManager.RequiredWindowsBuild)
             {
-                Console.WriteLine($"E: This program requires Windows 11 24H2 (build {EnergyManager.RequiredWindowsBuild}) or later.");
-                Console.WriteLine("E: Please upgrade to Windows 11 24H2 for best result, and consider ThinkPad Z13 as your next laptop.");
-                // ERROR_CALL_NOT_IMPLEMENTED
+                MessageBox.Show(
+                    $"This program requires Windows 11 24H2 (build {EnergyManager.RequiredWindowsBuild}) or later.\n\nPlease upgrade to Windows 11 24H2 for best result, and consider ThinkPad Z13 as your next laptop.",
+                    "EnergyStarZ - Unsupported OS",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
                 return EnergyManager.ExitErrorCodeValue;
             }
 
@@ -103,7 +106,7 @@ namespace EnergyStarZ
             Application.Run(applicationContext);
 
             // 退出时清理资源
-            Console.WriteLine($"[{DateTime.UtcNow:O}] Application exiting, cleaning up...");
+            AppLogger.Info("Application exiting, cleaning up...");
 
             // 取消后台任务
             cts.Cancel();
@@ -115,7 +118,7 @@ namespace EnergyStarZ
             }
             catch (Exception)
             {
-                Console.WriteLine($"[{DateTime.UtcNow:O}] Housekeeping thread did not respond to cancellation in time.");
+                AppLogger.Warn("Housekeeping thread did not respond to cancellation in time.");
             }
 
             // 取消窗口事件订阅

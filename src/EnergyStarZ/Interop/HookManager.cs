@@ -1,3 +1,4 @@
+using EnergyStarZ.Utilities;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
@@ -62,7 +63,7 @@ namespace EnergyStarZ.Interop
             catch (Exception ex)
             {
                 // 记录异常但不抛出，防止 Windows 移除钩子
-                Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] WindowEventCallback: {ex.Message}");
+                AppLogger.Error($"WindowEventCallback: {ex.Message}");
             }
         }
 
