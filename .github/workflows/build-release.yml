@@ -82,7 +82,7 @@ jobs:
 
       - name: Create ZIP archive
         run: |
-          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.*)') { $matches[1] } else { "dev-${{ github.sha.Substring(0,7) }}" }
+          $version = if ($env:GITHUB_REF -match 'refs/tags/v(.*)') { $matches[1] } else { "dev-$($env:GITHUB_SHA.Substring(0,7))" }
           $zipName = "EnergyStarZ-${{ matrix.label }}-$version.zip"
           Compress-Archive -Path "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/*" -DestinationPath "${{ env.OUTPUT_DIR }}/$zipName" -Force
           echo "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
