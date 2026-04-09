@@ -731,26 +731,17 @@ namespace EnergyStarZ
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsBypassProcess(ReadOnlySpan<char> processName)
         {
-            // 首先检查硬编码保护列表（最高优先级）
-            foreach (var protectedProcess in _hardcodedBypassList)
+            // 首先检查硬编码保护列表（最高优先级）- O(1) HashSet 查找
+            var processNameStr = processName.ToString();
+            if (_hardcodedBypassList.Contains(processNameStr))
             {
-                if (processName.Equals(protectedProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return true;
             }
 
-            // 然后检查配置列表
+            // 然后检查配置列表 - O(1) HashSet 查找
             lock (_bypassListLock)
             {
-                foreach (var bypassProcess in _bypassProcessList)
-                {
-                    if (processName.Equals(bypassProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-                return false;
+                return _bypassProcessList.Contains(processNameStr, StringComparer.OrdinalIgnoreCase);
             }
         }
 
@@ -766,6 +757,7 @@ namespace EnergyStarZ
                 (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation | Interop.Win32Api.ProcessAccessFlags.SetInformation), false, procId);
             if (procHandle == IntPtr.Zero) return;
 
+            bool childHandleReplaced = false;
             try
             {
                 var appName = GetProcessNameFromHandle(procHandle);
@@ -804,6 +796,7 @@ namespace EnergyStarZ
                         actualProcHandle = childProcessInfo.Value.Handle;
                         actualProcId = childProcessInfo.Value.Pid;
                         appName = childProcessInfo.Value.Name;
+                        childHandleReplaced = true;
                     }
                 }
 
@@ -881,7 +874,12 @@ namespace EnergyStarZ
             }
             finally
             {
-                Interop.Win32Api.CloseHandle(procHandle);
+                // 如果使用了子进程句柄，原句柄已关闭，但子句柄不应再关闭
+                // 如果没使用子进程句柄，原句柄需要关闭
+                if (!childHandleReplaced)
+                {
+                    Interop.Win32Api.CloseHandle(procHandle);
+                }
             }
         }
 

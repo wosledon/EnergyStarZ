@@ -103,7 +103,10 @@ namespace EnergyStarZ
             // 运行系统托盘应用程序
             Application.Run(applicationContext);
 
-            // 退出时取消后台任务
+            // 退出时清理资源
+            Console.WriteLine($"[{DateTime.UtcNow:O}] Application exiting, cleaning up...");
+
+            // 取消后台任务
             cts.Cancel();
 
             try
@@ -116,7 +119,11 @@ namespace EnergyStarZ
                 Console.WriteLine($"[{DateTime.UtcNow:O}] Housekeeping thread did not respond to cancellation in time.");
             }
 
+            // 取消窗口事件订阅
             HookManager.UnsubscribeWindowEvents();
+
+            // 显式释放 EnergyManager 单例（释放非托管资源）
+            energyManager.Dispose();
 
             return 0;
         }
