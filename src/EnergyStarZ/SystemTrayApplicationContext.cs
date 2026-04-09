@@ -20,6 +20,11 @@ namespace EnergyStarZ
 
         private HiddenFormForHotkeys? _hiddenFormForHotkeys;
 
+        // 缓存菜单项引用，避免索引访问
+        private ToolStripMenuItem? _autoModeItem;
+        private ToolStripMenuItem? _manualModeItem;
+        private ToolStripMenuItem? _pausedModeItem;
+
         public SystemTrayApplicationContext(AppSettings settings)
         {
             _settings = settings;
@@ -45,17 +50,17 @@ namespace EnergyStarZ
             var menu = new ContextMenuStrip();
             var currentMode = EnergyManager.CurrentMode;
 
-            var autoModeItem = new ToolStripMenuItem(LocalizationManager.GetString("AutoMode"));
-            autoModeItem.Checked = currentMode == PowerMode.Auto;
-            autoModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Auto);
+            _autoModeItem = new ToolStripMenuItem(LocalizationManager.GetString("AutoMode"));
+            _autoModeItem.Checked = currentMode == PowerMode.Auto;
+            _autoModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Auto);
 
-            var manualModeItem = new ToolStripMenuItem(LocalizationManager.GetString("ManualMode"));
-            manualModeItem.Checked = currentMode == PowerMode.Manual;
-            manualModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Manual);
+            _manualModeItem = new ToolStripMenuItem(LocalizationManager.GetString("ManualMode"));
+            _manualModeItem.Checked = currentMode == PowerMode.Manual;
+            _manualModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Manual);
 
-            var pausedModeItem = new ToolStripMenuItem(LocalizationManager.GetString("PausedMode"));
-            pausedModeItem.Checked = currentMode == PowerMode.Paused;
-            pausedModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Paused);
+            _pausedModeItem = new ToolStripMenuItem(LocalizationManager.GetString("PausedMode"));
+            _pausedModeItem.Checked = currentMode == PowerMode.Paused;
+            _pausedModeItem.Click += (sender, e) => SetPowerMode(PowerMode.Paused);
 
             var separator1 = new ToolStripSeparator();
 
@@ -91,9 +96,9 @@ namespace EnergyStarZ
             var exitItem = new ToolStripMenuItem(LocalizationManager.GetString("Exit"));
             exitItem.Click += OnExitClick;
 
-            menu.Items.Add(autoModeItem);
-            menu.Items.Add(manualModeItem);
-            menu.Items.Add(pausedModeItem);
+            menu.Items.Add(_autoModeItem);
+            menu.Items.Add(_manualModeItem);
+            menu.Items.Add(_pausedModeItem);
             menu.Items.Add(separator1);
             menu.Items.Add(autoPowerModeItem);
             menu.Items.Add(separator2);
@@ -135,7 +140,7 @@ namespace EnergyStarZ
             }
         }
 
-        private void SetPowerMode(PowerMode mode)
+        private async void SetPowerMode(PowerMode mode)
         {
             EnergyManager.CurrentMode = mode;
 
@@ -150,7 +155,8 @@ namespace EnergyStarZ
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("ManualModeActivated"), ToolTipIcon.Info);
                     break;
                 case PowerMode.Paused:
-                    EnergyManager.RestoreAllProcessesToNormal();
+                    // 异步恢复进程，避免阻塞 UI
+                    _ = EnergyManager.RestoreAllProcessesToNormalAsync();
                     Interop.HookManager.UnsubscribeWindowEvents();
                     ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("PausedModeActivated"), ToolTipIcon.Warning);
                     break;
@@ -175,18 +181,9 @@ namespace EnergyStarZ
 
         private void UpdateMenuCheckStates()
         {
-            if (trayIcon.ContextMenuStrip == null) return;
-
-            var menu = trayIcon.ContextMenuStrip;
-            var currentMode = EnergyManager.CurrentMode;
-
-            // 假设前 3 个 item 是模式选项
-            if (menu.Items.Count >= 3)
-            {
-                if (menu.Items[0] is ToolStripMenuItem autoItem) autoItem.Checked = currentMode == PowerMode.Auto;
-                if (menu.Items[1] is ToolStripMenuItem manualItem) manualItem.Checked = currentMode == PowerMode.Manual;
-                if (menu.Items[2] is ToolStripMenuItem pausedItem) pausedItem.Checked = currentMode == PowerMode.Paused;
-            }
+            if (_autoModeItem != null) _autoModeItem.Checked = EnergyManager.CurrentMode == PowerMode.Auto;
+            if (_manualModeItem != null) _manualModeItem.Checked = EnergyManager.CurrentMode == PowerMode.Manual;
+            if (_pausedModeItem != null) _pausedModeItem.Checked = EnergyManager.CurrentMode == PowerMode.Paused;
         }
 
         private void TogglePowerMode()

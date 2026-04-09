@@ -708,34 +708,43 @@ namespace EnergyStarZ
             ApplyEfficiencyMode(ProcessCache.Values, currentPendingPid);
         }
 
-        public static void RestoreAllProcessesToNormal()
+        public static async Task RestoreAllProcessesToNormalAsync()
         {
             var processSnapshot = ProcessCache.Values.ToList();
 
-            foreach (var procInfo in processSnapshot)
+            await Task.Run(() =>
             {
-                var hProcess = Interop.Win32Api.OpenProcess(
-                    (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
-                    false,
-                    (uint)procInfo.Id);
-
-                if (hProcess != IntPtr.Zero)
+                foreach (var procInfo in processSnapshot)
                 {
-                    try
+                    var hProcess = Interop.Win32Api.OpenProcess(
+                        (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
+                               Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                        false,
+                        (uint)procInfo.Id);
+
+                    if (hProcess != IntPtr.Zero)
                     {
-                        ToggleEfficiencyMode(hProcess, false);
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
-                    }
-                    finally
-                    {
-                        Interop.Win32Api.CloseHandle(hProcess);
+                        try
+                        {
+                            ToggleEfficiencyMode(hProcess, false);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
+                        }
+                        finally
+                        {
+                            Interop.Win32Api.CloseHandle(hProcess);
+                        }
                     }
                 }
-            }
+            });
+        }
+
+        [Obsolete("Use RestoreAllProcessesToNormalAsync instead")]
+        public static void RestoreAllProcessesToNormal()
+        {
+            RestoreAllProcessesToNormalAsync().GetAwaiter().GetResult();
         }
 
         private static string GetProcessNameFromHandle(IntPtr hProcess)
