@@ -19,13 +19,44 @@ namespace EnergyStarZ
         public static int RequiredWindowsBuild => MinWindowsBuild;
         public static int ExitErrorCodeValue => ExitErrorCode;
 
+        // 硬编码最低保护列表 - 无论配置如何，这些进程永远不被节流
+        // 包含 P0 核心系统进程和部分 P1 用户体验关键进程
+        private static readonly HashSet<string> _hardcodedBypassList = new(StringComparer.OrdinalIgnoreCase)
+        {
+            // === P0 核心系统进程 ===
+            "csrss.exe",              // Client/Server Runtime Subsystem
+            "smss.exe",               // Session Manager Subsystem
+            "wininit.exe",            // Windows 启动进程
+            "winlogon.exe",           // Windows 登录管理器
+            "lsass.exe",              // Local Security Authority Subsystem Service
+            "services.exe",           // Service Control Manager
+            "svchost.exe",            // Service Host（承载多个 Windows 服务）
+            "Registry",               // Registry hive 加载进程（无 .exe 扩展）
+
+            // === P1 显示与 Shell ===
+            "dwm.exe",                // Desktop Window Manager
+            "explorer.exe",           // Windows Shell（任务栏、文件管理器）
+            "fontdrvhost.exe",        // 字体驱动宿主进程
+            "sihost.exe",             // Shell Infrastructure Host（通知、操作中心）
+            "ShellExperienceHost.exe",// Shell 体验宿主
+            "StartMenuExperienceHost.exe", // 开始菜单
+            "SearchHost.exe",         // Windows 搜索 UI 宿主
+
+            // === P1 输入与语言 ===
+            "ctfmon.exe",             // Text Services Framework（输入法支持）
+            "ChsIME.exe",             // 中文输入法（简体）
+        };
+
         public static IReadOnlyCollection<string> BypassProcessList
         {
             get
             {
                 lock (_bypassListLock)
                 {
-                    return _bypassProcessList.ToList().AsReadOnly();
+                    // 合并配置列表和硬编码保护列表
+                    var mergedList = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
+                    mergedList.UnionWith(_hardcodedBypassList);
+                    return mergedList.ToList().AsReadOnly();
                 }
             }
         }
@@ -41,7 +72,12 @@ namespace EnergyStarZ
         private static readonly LinkedList<(uint pid, string name, DateTime lastAccess, int weight)> _recentlyUsedApps = new();
         private static readonly Dictionary<uint, LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>> _appLookup = new();
         private static int _lruCacheSize = 5;
+        private static int _minLRUSize = 3;
+        private static int _maxLRUSize = 15;
         private static TimeSpan _timeoutPeriod = TimeSpan.FromSeconds(30);
+        private static TimeSpan _lruDecayPeriod = TimeSpan.FromMinutes(5); // LRU 时间衰减周期
+        private static DateTime _lastLRUAdjustment = DateTime.UtcNow;
+        private static int _foregroundSwitchCount = 0; // 前台切换计数器（用于自动调整）
 
         private static readonly object _pendingProcLock = new();
         private static uint _pendingProcPid = 0;
@@ -116,6 +152,20 @@ namespace EnergyStarZ
                 {
                     _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
                     _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+
+                    // 加载 LRU 时间衰减配置（默认 5 分钟）
+                    if (settings.LRUDecayMinutes > 0)
+                    {
+                        _lruDecayPeriod = TimeSpan.FromMinutes(settings.LRUDecayMinutes);
+                    }
+
+                    // 加载 LRU 自动调整配置
+                    if (settings.LRUMinSize > 0 && settings.LRUMaxSize >= settings.LRUMinSize)
+                    {
+                        _minLRUSize = settings.LRUMinSize;
+                        _maxLRUSize = settings.LRUMaxSize;
+                        _lruCacheSize = Math.Clamp(_lruCacheSize, _minLRUSize, _maxLRUSize);
+                    }
                 }
 
                 _switchDebounceMs = settings.SwitchDebounceMs > 0 ? settings.SwitchDebounceMs : DefaultSwitchDebounceMs;
@@ -181,6 +231,9 @@ namespace EnergyStarZ
                 try
                 {
                     RefreshProcessCache();
+
+                    // 定期清理过期的 LRU 条目（每分钟一次）
+                    CleanupExpiredApps();
                 }
                 catch (Exception ex)
                 {
@@ -335,6 +388,12 @@ namespace EnergyStarZ
                 var newNode = new LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>((pid, name, now, newWeight));
                 _recentlyUsedApps.AddFirst(newNode);
                 _appLookup[pid] = newNode;
+
+                // 增加前台切换计数
+                _foregroundSwitchCount++;
+
+                // 检查是否需要自动调整 LRU 大小
+                AutoAdjustLRUSize(now);
             }
         }
 
@@ -372,7 +431,8 @@ namespace EnergyStarZ
                 {
                     var prevNode = node.Previous;
 
-                    if ((now - node.Value.lastAccess) > _timeoutPeriod)
+                    // 时间衰减：超过 5 分钟未访问则移除
+                    if ((now - node.Value.lastAccess) > _lruDecayPeriod)
                     {
                         _appLookup.Remove(node.Value.pid);
                         _recentlyUsedApps.Remove(node);
@@ -380,6 +440,73 @@ namespace EnergyStarZ
 
                     node = prevNode;
                 }
+            }
+        }
+
+        /// <summary>
+        /// 自动调整 LRU 缓存大小
+        /// 根据前台切换频率动态调整：切换频繁则增大，否则缩小
+        /// </summary>
+        private static void AutoAdjustLRUSize(DateTime now)
+        {
+            // 每 2 分钟检查一次
+            if ((now - _lastLRUAdjustment).TotalMinutes < 2)
+                return;
+
+            lock (_lruLock)
+            {
+                var elapsedMinutes = (now - _lastLRUAdjustment).TotalMinutes;
+                var switchesPerMinute = _foregroundSwitchCount / Math.Max(1, elapsedMinutes);
+
+                int targetSize;
+
+                if (switchesPerMinute > 10)
+                {
+                    // 高频切换用户（>10 次/分钟）：增大 LRU
+                    targetSize = Math.Min(_maxLRUSize, _lruCacheSize + 2);
+                }
+                else if (switchesPerMinute > 5)
+                {
+                    // 中频切换用户（5-10 次/分钟）：保持当前大小
+                    targetSize = _lruCacheSize;
+                }
+                else
+                {
+                    // 低频切换用户（<5 次/分钟）：缩小 LRU
+                    targetSize = Math.Max(_minLRUSize, _lruCacheSize - 1);
+                }
+
+                // 如果 LRU 中实际应用数量很少，也缩小
+                var activeAppCount = _recentlyUsedApps.Count;
+                if (activeAppCount < _lruCacheSize / 2 && _lruCacheSize > _minLRUSize)
+                {
+                    targetSize = Math.Max(_minLRUSize, activeAppCount + 1);
+                }
+
+                if (targetSize != _lruCacheSize)
+                {
+                    Console.WriteLine($"[{now:O}] [LRU] Auto-adjusting LRU size from {_lruCacheSize} to {targetSize} (switches/min: {switchesPerMinute:F1}, active apps: {activeAppCount})");
+                    _lruCacheSize = targetSize;
+
+                    // 如果缩小，淘汰最旧的条目
+                    while (_recentlyUsedApps.Count > _lruCacheSize)
+                    {
+                        var oldestNode = _recentlyUsedApps.Last;
+                        if (oldestNode != null)
+                        {
+                            _appLookup.Remove(oldestNode.Value.pid);
+                            _recentlyUsedApps.RemoveLast();
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                // 重置计数器
+                _foregroundSwitchCount = 0;
+                _lastLRUAdjustment = now;
             }
         }
 
@@ -494,6 +621,7 @@ namespace EnergyStarZ
 
         /// <summary>
         /// 对指定进程列表应用效率模式，排除白名单和指定的前台/待处理进程
+        /// LRU 缓存中的应用会被优先恢复（不被节流）
         /// </summary>
         private static void ApplyEfficiencyMode(IEnumerable<ProcessInfo> processes, uint excludePid1, uint excludePid2 = 0)
         {
@@ -504,10 +632,18 @@ namespace EnergyStarZ
                 if (procInfo.Id == excludePid1 || procInfo.Id == excludePid2)
                     continue;
 
+                // 检查保护列表（系统进程）
                 lock (_bypassListLock)
                 {
                     if (_bypassProcessList.Contains(procInfo.Name))
                         continue;
+                }
+
+                // 检查 LRU 缓存（最近使用的应用优先恢复）
+                if (IsAppInRecentList((uint)procInfo.Id))
+                {
+                    // LRU 中的应用：恢复或保持不节流
+                    continue;
                 }
 
                 var hProcess = Interop.Win32Api.OpenProcess(
@@ -595,6 +731,16 @@ namespace EnergyStarZ
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsBypassProcess(ReadOnlySpan<char> processName)
         {
+            // 首先检查硬编码保护列表（最高优先级）
+            foreach (var protectedProcess in _hardcodedBypassList)
+            {
+                if (processName.Equals(protectedProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            // 然后检查配置列表
             lock (_bypassListLock)
             {
                 foreach (var bypassProcess in _bypassProcessList)
@@ -664,12 +810,21 @@ namespace EnergyStarZ
                 var currentTime = DateTime.UtcNow;
                 var timeSinceLastSwitch = currentTime - _lastSwitchTime;
 
-                // Boost the current foreground app
-                var bypass = IsBypassProcess(appName.AsSpan());
-                if (!bypass)
+                // 检查是否为受保护进程（系统进程）
+                var isProtected = IsBypassProcess(appName.AsSpan());
+
+                // 只有非受保护的用户应用才记录到 LRU 缓存
+                if (!isProtected)
                 {
+                    AddOrUpdateApp(actualProcId, appName);
+
+                    // Boost the current foreground app
                     Console.WriteLine($"[{DateTime.UtcNow:O}] [FOREGROUND] Boost {appName}");
                     ToggleEfficiencyMode(actualProcHandle, false);
+                }
+                else
+                {
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [FOREGROUND] Skip protected process: {appName}");
                 }
 
                 // 防抖：距离上次切换太近则跳过
@@ -714,6 +869,7 @@ namespace EnergyStarZ
                 }
 
                 // 对其他后台进程应用效率限制
+                // 优先恢复 LRU 缓存中的应用
                 ApplyEfficiencyMode(ProcessCache.Values, actualProcId, prevPid);
 
                 _lastSwitchTime = currentTime;

@@ -14,6 +14,13 @@ namespace EnergyStarZ.Config
         public int TimeoutSeconds { get; set; } = 30;
         public bool EnableAutoPowerMode { get; set; } = false;
         public int SwitchDebounceMs { get; set; } = 500;
+
+        // LRU 时间衰减配置（分钟）
+        public int LRUDecayMinutes { get; set; } = 5;
+
+        // LRU 自动调整配置
+        public int LRUMinSize { get; set; } = 3;
+        public int LRUMaxSize { get; set; } = 15;
     }
 
     public static class ConfigurationHelper
