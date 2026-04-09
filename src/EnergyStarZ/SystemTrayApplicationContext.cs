@@ -18,10 +18,6 @@ namespace EnergyStarZ
         private readonly AppSettings _settings;
         private readonly string _configFilePath;
 
-        private const int HOTKEY_ID_TOGGLE_MODE = 1001;
-        private const int HOTKEY_ID_PAUSE = 1002;
-        private const int HOTKEY_ID_RESUME = 1003;
-
         private HiddenFormForHotkeys? _hiddenFormForHotkeys;
 
         public SystemTrayApplicationContext(AppSettings settings)
@@ -269,13 +265,13 @@ namespace EnergyStarZ
         {
             switch (e.HotkeyId)
             {
-                case HOTKEY_ID_TOGGLE_MODE:
+                case HiddenFormForHotkeys.HotkeyIdToggleMode:
                     TogglePowerMode();
                     break;
-                case HOTKEY_ID_PAUSE:
+                case HiddenFormForHotkeys.HotkeyIdPause:
                     SetPowerMode(PowerMode.Paused);
                     break;
-                case HOTKEY_ID_RESUME:
+                case HiddenFormForHotkeys.HotkeyIdResume:
                     SetPowerMode(PowerMode.Auto);
                     break;
             }

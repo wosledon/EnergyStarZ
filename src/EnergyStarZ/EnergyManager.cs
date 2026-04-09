@@ -9,9 +9,30 @@ using Microsoft.Extensions.Configuration;
 
 namespace EnergyStarZ
 {
-    public unsafe class EnergyManager : IDisposable
+    public class EnergyManager : IDisposable
     {
-        public static HashSet<string> BypassProcessList = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 配置常量
+        private const int DefaultSwitchDebounceMs = 500;
+        private const int MinWindowsBuild = 26100;
+        private const int ExitErrorCode = 120;
+
+        public static int RequiredWindowsBuild => MinWindowsBuild;
+        public static int ExitErrorCodeValue => ExitErrorCode;
+
+        public static IReadOnlyCollection<string> BypassProcessList
+        {
+            get
+            {
+                lock (_bypassListLock)
+                {
+                    return _bypassProcessList.ToList().AsReadOnly();
+                }
+            }
+        }
+
+        private static readonly object _bypassListLock = new();
+        private static HashSet<string> _bypassProcessList = new(StringComparer.OrdinalIgnoreCase);
+
         // Speical handling needs for UWP to get the child window process
         public const string UWPFrameHostApp = "ApplicationFrameHost.exe";
 
@@ -22,12 +43,14 @@ namespace EnergyStarZ
         private static int _lruCacheSize = 5;
         private static TimeSpan _timeoutPeriod = TimeSpan.FromSeconds(30);
 
-        private static volatile uint _pendingProcPid = 0;
-        private static volatile string _pendingProcName = "";
+        private static readonly object _pendingProcLock = new();
+        private static uint _pendingProcPid = 0;
+        private static string _pendingProcName = "";
 
         private static IntPtr pThrottleOn = IntPtr.Zero;
         private static IntPtr pThrottleOff = IntPtr.Zero;
         private static int szControlBlock = 0;
+        private static bool _unmanagedResourcesInitialized = false;
 
         private static readonly ThreadLocal<StringBuilder> _threadLocalStringBuilder =
             new(() => new StringBuilder(1024));
@@ -36,8 +59,11 @@ namespace EnergyStarZ
 
         private static readonly ConcurrentDictionary<int, ProcessInfo> ProcessCache = new();
 
-        private static System.Threading.Timer? ProcessCacheRefreshTimer;
-        private static System.Threading.Timer? PowerStatusCheckTimer;
+        // 后台任务
+        private static CancellationTokenSource? _backgroundTasksCts;
+        private static Task? _processCacheRefreshTask;
+        private static Task? _powerStatusCheckTask;
+        
         private static volatile bool _isBatteryPowered = false;
         private static volatile bool _autoPowerModeEnabled = false;
 
@@ -49,51 +75,160 @@ namespace EnergyStarZ
         }
 
         private static DateTime _lastSwitchTime = DateTime.MinValue;
+        private static int _switchDebounceMs = DefaultSwitchDebounceMs;
 
-        static EnergyManager()
+        // 单例实例用于生命周期管理
+        private static EnergyManager? _instance;
+        private static readonly object _instanceLock = new();
+
+        public static EnergyManager Instance
         {
-            szControlBlock = Marshal.SizeOf<Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE>();
-            pThrottleOn = Marshal.AllocHGlobal(szControlBlock);
-            pThrottleOff = Marshal.AllocHGlobal(szControlBlock);
-
-            var throttleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+            get
             {
-                Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-                ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-                StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-            };
+                lock (_instanceLock)
+                {
+                    _instance ??= new EnergyManager();
+                    return _instance;
+                }
+            }
+        }
 
-            var unthrottleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
-            {
-                Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
-                ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
-                StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.None,
-            };
-
-            Marshal.StructureToPtr(throttleState, pThrottleOn, false);
-            Marshal.StructureToPtr(unthrottleState, pThrottleOff, false);
-
-            ProcessCacheRefreshTimer = new System.Threading.Timer(RefreshProcessCache, null, TimeSpan.Zero, TimeSpan.FromSeconds(30));
-            PowerStatusCheckTimer = new System.Threading.Timer(CheckPowerStatus, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
-
+        private EnergyManager()
+        {
+            InitializeUnmanagedResources();
+            StartTimers();
             LoadConfiguration();
         }
 
         public static void LoadConfiguration()
         {
-            var config = ConfigurationHelper.LoadConfiguration();
-            var settings = ConfigurationHelper.GetAppSettings(config);
-
-            BypassProcessList = new HashSet<string>(settings.BypassProcessList, StringComparer.OrdinalIgnoreCase);
-
-            lock (_lruLock)
+            try
             {
-                _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
-                _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+                var config = ConfigurationHelper.LoadConfiguration();
+                var settings = ConfigurationHelper.GetAppSettings(config);
+
+                lock (_bypassListLock)
+                {
+                    _bypassProcessList = new HashSet<string>(settings.BypassProcessList ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+                }
+
+                lock (_lruLock)
+                {
+                    _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
+                    _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+                }
+
+                _switchDebounceMs = settings.SwitchDebounceMs > 0 ? settings.SwitchDebounceMs : DefaultSwitchDebounceMs;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Failed to load configuration: {ex.Message}");
             }
         }
 
-        private static void CheckPowerStatus(object? state)
+        private void InitializeUnmanagedResources()
+        {
+            if (_unmanagedResourcesInitialized)
+                return;
+
+            try
+            {
+                szControlBlock = Marshal.SizeOf<Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE>();
+                pThrottleOn = Marshal.AllocHGlobal(szControlBlock);
+                pThrottleOff = Marshal.AllocHGlobal(szControlBlock);
+
+                var throttleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+                {
+                    Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                    ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                    StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                };
+
+                var unthrottleState = new Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE
+                {
+                    Version = Interop.Win32Api.PROCESS_POWER_THROTTLING_STATE.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                    ControlMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+                    StateMask = Interop.Win32Api.ProcessorPowerThrottlingFlags.None,
+                };
+
+                Marshal.StructureToPtr(throttleState, pThrottleOn, false);
+                Marshal.StructureToPtr(unthrottleState, pThrottleOff, false);
+
+                _unmanagedResourcesInitialized = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Failed to initialize unmanaged resources: {ex.Message}");
+                ReleaseUnmanagedResources();
+                throw;
+            }
+        }
+
+        private void StartTimers()
+        {
+            _backgroundTasksCts = new CancellationTokenSource();
+
+            _processCacheRefreshTask = Task.Run(() => RefreshProcessCacheLoop(_backgroundTasksCts.Token), _backgroundTasksCts.Token);
+            _powerStatusCheckTask = Task.Run(() => PowerStatusCheckLoop(_backgroundTasksCts.Token), _backgroundTasksCts.Token);
+        }
+
+        private static async Task RefreshProcessCacheLoop(CancellationToken cancellationToken)
+        {
+            Console.WriteLine($"[{DateTime.UtcNow:O}] Process cache refresh loop started.");
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    RefreshProcessCache();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RefreshProcessCache: {ex.Message}");
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            Console.WriteLine($"[{DateTime.UtcNow:O}] Process cache refresh loop stopped.");
+        }
+
+        private static async Task PowerStatusCheckLoop(CancellationToken cancellationToken)
+        {
+            Console.WriteLine($"[{DateTime.UtcNow:O}] Power status check loop started.");
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    CheckPowerStatus();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] CheckPowerStatus: {ex.Message}");
+                }
+
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
+
+            Console.WriteLine($"[{DateTime.UtcNow:O}] Power status check loop stopped.");
+        }
+
+        private static void CheckPowerStatus()
         {
             if (!_autoPowerModeEnabled)
                 return;
@@ -109,13 +244,13 @@ namespace EnergyStarZ
                 {
                     CurrentMode = PowerMode.Auto;
                     HookManager.SubscribeToWindowEvents();
-                    Console.WriteLine("[POWER STATUS] Switched to Battery Mode - Automatic energy saving enabled");
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [POWER STATUS] Switched to Battery Mode - Automatic energy saving enabled");
                 }
                 else
                 {
                     CurrentMode = PowerMode.Paused;
                     HookManager.UnsubscribeWindowEvents();
-                    Console.WriteLine("[POWER STATUS] Switched to AC Mode - Energy saving paused");
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [POWER STATUS] Switched to AC Mode - Energy saving paused");
                 }
             }
         }
@@ -130,7 +265,51 @@ namespace EnergyStarZ
             Dispose(false);
         }
 
-        // LRU缓存管理方法
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // 取消后台任务
+                _backgroundTasksCts?.Cancel();
+                
+                try
+                {
+                    // 等待任务完成（最多等待 5 秒）
+                    var tasks = new List<Task>();
+                    if (_processCacheRefreshTask != null) tasks.Add(_processCacheRefreshTask);
+                    if (_powerStatusCheckTask != null) tasks.Add(_powerStatusCheckTask);
+                    
+                    if (tasks.Count > 0)
+                    {
+                        Task.WhenAll(tasks).Wait(TimeSpan.FromSeconds(5));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [WARNING] Error waiting for background tasks: {ex.Message}");
+                }
+                finally
+                {
+                    _backgroundTasksCts?.Dispose();
+                    _backgroundTasksCts = null;
+                }
+
+                ProcessCache.Clear();
+                lock (_lruLock)
+                {
+                    _recentlyUsedApps.Clear();
+                    _appLookup.Clear();
+                }
+            }
+
+            ReleaseUnmanagedResources();
+        }
         private static void AddOrUpdateApp(uint pid, string name)
         {
             lock (_lruLock)
@@ -206,6 +385,9 @@ namespace EnergyStarZ
 
         private static void ReleaseUnmanagedResources()
         {
+            if (!_unmanagedResourcesInitialized)
+                return;
+
             if (pThrottleOn != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(pThrottleOn);
@@ -216,30 +398,8 @@ namespace EnergyStarZ
                 Marshal.FreeHGlobal(pThrottleOff);
                 pThrottleOff = IntPtr.Zero;
             }
-        }
 
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        private void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                ProcessCacheRefreshTimer?.Dispose();
-                PowerStatusCheckTimer?.Dispose();
-
-                ProcessCache.Clear();
-                lock (_lruLock)
-                {
-                    _recentlyUsedApps.Clear();
-                    _appLookup.Clear();
-                }
-            }
-
-            ReleaseUnmanagedResources();
+            _unmanagedResourcesInitialized = false;
         }
 
         private static void ToggleEfficiencyMode(IntPtr hProcess, bool enable)
@@ -263,53 +423,72 @@ namespace EnergyStarZ
             }
         }
 
-        private static void RefreshProcessCache(object? state)
+        private static void RefreshProcessCache()
         {
+            Process[]? processes = null;
             try
             {
-                var processes = Process.GetProcesses();
-                var activeIds = new HashSet<int>(processes.Length);
+                processes = Process.GetProcesses();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] Failed to get processes: {ex.Message}");
+                return;
+            }
 
+            var activeIds = new HashSet<int>(processes.Length);
+
+            try
+            {
                 foreach (var proc in processes)
                 {
-                    if (proc.SessionId != CurrentSessionId)
+                    try
                     {
-                        proc.Dispose();
-                        continue;
-                    }
-
-                    activeIds.Add(proc.Id);
-
-                    if (!ProcessCache.ContainsKey(proc.Id))
-                    {
-                        ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, proc.ProcessName + ".exe"));
-                    }
-                    else
-                    {
-                        var existing = ProcessCache[proc.Id];
-                        if (existing.Name != proc.ProcessName + ".exe")
+                        if (proc.SessionId != CurrentSessionId)
                         {
-                            ProcessCache[proc.Id] = new ProcessInfo(proc.Id, proc.ProcessName + ".exe");
+                            continue;
+                        }
+
+                        activeIds.Add(proc.Id);
+
+                        var procName = proc.ProcessName + ".exe";
+                        if (!ProcessCache.ContainsKey(proc.Id))
+                        {
+                            ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, procName));
+                        }
+                        else
+                        {
+                            var existing = ProcessCache[proc.Id];
+                            if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                ProcessCache[proc.Id] = new ProcessInfo(proc.Id, procName);
+                            }
                         }
                     }
-                }
-
-                foreach (var kvp in ProcessCache)
-                {
-                    if (!activeIds.Contains(kvp.Key))
+                    catch
                     {
-                        ProcessCache.TryRemove(kvp.Key, out _);
+                        // 忽略单个进程的异常
+                    }
+                    finally
+                    {
+                        proc.Dispose();
                     }
                 }
-
+            }
+            finally
+            {
                 foreach (var proc in processes)
                 {
                     proc.Dispose();
                 }
             }
-            catch (Exception ex)
+
+            foreach (var kvp in ProcessCache)
             {
-                Console.WriteLine($"Error refreshing process cache: {ex.Message}");
+                if (!activeIds.Contains(kvp.Key))
+                {
+                    ProcessCache.TryRemove(kvp.Key, out _);
+                }
             }
         }
 
@@ -318,12 +497,18 @@ namespace EnergyStarZ
         /// </summary>
         private static void ApplyEfficiencyMode(IEnumerable<ProcessInfo> processes, uint excludePid1, uint excludePid2 = 0)
         {
-            foreach (var procInfo in processes)
+            var processSnapshot = processes.ToList();
+
+            foreach (var procInfo in processSnapshot)
             {
                 if (procInfo.Id == excludePid1 || procInfo.Id == excludePid2)
                     continue;
-                if (BypassProcessList.Contains(procInfo.Name))
-                    continue;
+
+                lock (_bypassListLock)
+                {
+                    if (_bypassProcessList.Contains(procInfo.Name))
+                        continue;
+                }
 
                 var hProcess = Interop.Win32Api.OpenProcess(
                     (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
@@ -336,6 +521,10 @@ namespace EnergyStarZ
                     try
                     {
                         ToggleEfficiencyMode(hProcess, true);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] ApplyEfficiencyMode failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
                     }
                     finally
                     {
@@ -350,12 +539,20 @@ namespace EnergyStarZ
             if (CurrentMode == PowerMode.Paused)
                 return;
 
-            ApplyEfficiencyMode(ProcessCache.Values, _pendingProcPid);
+            uint currentPendingPid;
+            lock (_pendingProcLock)
+            {
+                currentPendingPid = _pendingProcPid;
+            }
+
+            ApplyEfficiencyMode(ProcessCache.Values, currentPendingPid);
         }
 
         public static void RestoreAllProcessesToNormal()
         {
-            foreach (var procInfo in ProcessCache.Values)
+            var processSnapshot = ProcessCache.Values.ToList();
+
+            foreach (var procInfo in processSnapshot)
             {
                 var hProcess = Interop.Win32Api.OpenProcess(
                     (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
@@ -368,6 +565,10 @@ namespace EnergyStarZ
                     try
                     {
                         ToggleEfficiencyMode(hProcess, false);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
                     }
                     finally
                     {
@@ -394,17 +595,20 @@ namespace EnergyStarZ
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsBypassProcess(ReadOnlySpan<char> processName)
         {
-            foreach (var bypassProcess in BypassProcessList)
+            lock (_bypassListLock)
             {
-                if (processName.Equals(bypassProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                foreach (var bypassProcess in _bypassProcessList)
                 {
-                    return true;
+                    if (processName.Equals(bypassProcess.AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
                 }
+                return false;
             }
-            return false;
         }
 
-        public static unsafe void HandleForegroundEvent(IntPtr hwnd)
+        public static void HandleForegroundEvent(IntPtr hwnd)
         {
             if (CurrentMode == PowerMode.Paused)
                 return;
@@ -419,31 +623,42 @@ namespace EnergyStarZ
             try
             {
                 var appName = GetProcessNameFromHandle(procHandle);
+                uint actualProcId = procId;
+                IntPtr actualProcHandle = procHandle;
 
                 // UWP needs to be handled in a special case
                 if (appName.Equals(UWPFrameHostApp, StringComparison.OrdinalIgnoreCase))
                 {
-                    var found = false;
+                    UwpChildProcessInfo? childProcessInfo = null;
+
                     Interop.Win32Api.EnumChildWindows(hwnd, (innerHwnd, lparam) =>
                     {
-                        if (found) return true;
+                        if (childProcessInfo.HasValue) return false;
+
                         if (Interop.Win32Api.GetWindowThreadProcessId(innerHwnd, out uint innerProcId) > 0)
                         {
-                            if (procId == innerProcId) return true;
+                            if (actualProcId == innerProcId) return true;
 
-                            var innerProcHandle = Interop.Win32Api.OpenProcess((uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation |
-                                Interop.Win32Api.ProcessAccessFlags.SetInformation), false, innerProcId);
+                            var innerProcHandle = Interop.Win32Api.OpenProcess(
+                                (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation | Interop.Win32Api.ProcessAccessFlags.SetInformation),
+                                false, innerProcId);
                             if (innerProcHandle == IntPtr.Zero) return true;
 
-                            found = true;
-                            Interop.Win32Api.CloseHandle(procHandle);
-                            procHandle = innerProcHandle;
-                            procId = innerProcId;
-                            appName = GetProcessNameFromHandle(procHandle);
+                            var innerAppName = GetProcessNameFromHandle(innerProcHandle);
+                            childProcessInfo = new UwpChildProcessInfo(innerProcId, innerProcHandle, innerAppName);
+                            return false;
                         }
 
                         return true;
                     }, IntPtr.Zero);
+
+                    if (childProcessInfo.HasValue)
+                    {
+                        Interop.Win32Api.CloseHandle(actualProcHandle);
+                        actualProcHandle = childProcessInfo.Value.Handle;
+                        actualProcId = childProcessInfo.Value.Pid;
+                        appName = childProcessInfo.Value.Name;
+                    }
                 }
 
                 var currentTime = DateTime.UtcNow;
@@ -453,23 +668,29 @@ namespace EnergyStarZ
                 var bypass = IsBypassProcess(appName.AsSpan());
                 if (!bypass)
                 {
-                    Console.WriteLine($"Boost {appName}");
-                    ToggleEfficiencyMode(procHandle, false);
+                    Console.WriteLine($"[{DateTime.UtcNow:O}] [FOREGROUND] Boost {appName}");
+                    ToggleEfficiencyMode(actualProcHandle, false);
                 }
 
                 // 防抖：距离上次切换太近则跳过
-                if (timeSinceLastSwitch < TimeSpan.FromMilliseconds(500))
+                if (timeSinceLastSwitch < TimeSpan.FromMilliseconds(_switchDebounceMs))
                 {
-                    UpdateAppAccessTime(procId);
+                    UpdateAppAccessTime(actualProcId);
                     return;
                 }
 
                 // 对之前的前台应用应用效率限制
-                var prevPid = _pendingProcPid;
-                if (prevPid != 0 && prevPid != procId)
+                uint prevPid;
+                lock (_pendingProcLock)
                 {
-                    var prevProcHandle = Interop.Win32Api.OpenProcess((uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation), false, prevPid);
+                    prevPid = _pendingProcPid;
+                }
+
+                if (prevPid != 0 && prevPid != actualProcId)
+                {
+                    var prevProcHandle = Interop.Win32Api.OpenProcess(
+                        (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation | Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                        false, prevPid);
                     if (prevProcHandle != IntPtr.Zero)
                     {
                         try
@@ -477,9 +698,13 @@ namespace EnergyStarZ
                             var prevAppName = GetProcessNameFromHandle(prevProcHandle);
                             if (!string.IsNullOrEmpty(prevAppName) && !IsBypassProcess(prevAppName.AsSpan()))
                             {
-                                Console.WriteLine($"Throttle {prevAppName}");
+                                Console.WriteLine($"[{DateTime.UtcNow:O}] [BACKGROUND] Throttle {prevAppName}");
                                 ToggleEfficiencyMode(prevProcHandle, true);
                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[{DateTime.UtcNow:O}] [ERROR] Failed to throttle previous process: {ex.Message}");
                         }
                         finally
                         {
@@ -489,17 +714,22 @@ namespace EnergyStarZ
                 }
 
                 // 对其他后台进程应用效率限制
-                ApplyEfficiencyMode(ProcessCache.Values, procId, prevPid);
+                ApplyEfficiencyMode(ProcessCache.Values, actualProcId, prevPid);
 
                 _lastSwitchTime = currentTime;
-                _pendingProcPid = procId;
-                _pendingProcName = appName;
+                lock (_pendingProcLock)
+                {
+                    _pendingProcPid = actualProcId;
+                    _pendingProcName = appName;
+                }
             }
             finally
             {
                 Interop.Win32Api.CloseHandle(procHandle);
             }
         }
+
+        private readonly record struct UwpChildProcessInfo(uint Pid, IntPtr Handle, string Name);
 
         private readonly record struct ProcessInfo(int Id, string Name);
     }

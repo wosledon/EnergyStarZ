@@ -8,39 +8,35 @@ namespace EnergyStarZ
     internal class Program
     {
         private static AppSettings _settings = null!;
-        
+
         static async Task HouseKeepingThreadProc(AppSettings settings, CancellationToken cancellationToken)
         {
-            Console.WriteLine("House keeping thread started.");
-            
+            Console.WriteLine($"[{DateTime.UtcNow:O}] House keeping thread started.");
+
             try
             {
-                // 使用配置中的间隔时间
                 using var houseKeepingTimer = new PeriodicTimer(TimeSpan.FromMinutes(settings.ScanIntervalMinutes));
-                
+
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     try
                     {
                         await houseKeepingTimer.WaitForNextTickAsync(cancellationToken);
-                        
-                        // 使用配置中的延迟时间
+
                         await Task.Delay(TimeSpan.FromSeconds(settings.ThrottleDelaySeconds), cancellationToken);
-                        
+
                         EnergyManager.ThrottleAllUserBackgroundProcesses();
                     }
                     catch (OperationCanceledException)
                     {
-                        // 正常退出
                         break;
                     }
                     catch (Exception ex)
                     {
                         if (settings.EnableLogging)
                         {
-                            Console.WriteLine($"Housekeeping error: {ex.Message}");
+                            Console.WriteLine($"[{DateTime.UtcNow:O}] Housekeeping error: {ex.Message}");
                         }
-                        // 继续运行而不是崩溃
                     }
                 }
             }
@@ -51,7 +47,7 @@ namespace EnergyStarZ
         }
 
         [STAThread]
-        static async Task<int> Main(string[] args)
+        static int Main(string[] args)
         {
             // 加载配置
             var config = ConfigurationHelper.LoadConfiguration();
@@ -61,13 +57,16 @@ namespace EnergyStarZ
             // Nickel or higher will be better, but at least it works in Cobalt
             //
             // In .NET 5.0 and later, System.Environment.OSVersion always returns the actual OS version.
-            if (Environment.OSVersion.Version.Build < 26100)
+            if (Environment.OSVersion.Version.Build < EnergyManager.RequiredWindowsBuild)
             {
-                Console.WriteLine("E: You are too poor to use this program.");
+                Console.WriteLine($"E: This program requires Windows 11 24H2 (build {EnergyManager.RequiredWindowsBuild}) or later.");
                 Console.WriteLine("E: Please upgrade to Windows 11 24H2 for best result, and consider ThinkPad Z13 as your next laptop.");
                 // ERROR_CALL_NOT_IMPLEMENTED
-                Environment.Exit(120);
+                return EnergyManager.ExitErrorCodeValue;
             }
+
+            // 初始化 EnergyManager 单例
+            using var energyManager = EnergyManager.Instance;
 
             // 初始化 Windows Forms
             Application.EnableVisualStyles();
@@ -88,7 +87,7 @@ namespace EnergyStarZ
 
             // 创建系统托盘应用程序上下文
             var applicationContext = new SystemTrayApplicationContext(_settings);
-            
+
             // 启动后台任务
             using var cts = new CancellationTokenSource();
             var houseKeepingTask = Task.Run(() => HouseKeepingThreadProc(_settings, cts.Token), cts.Token);
@@ -98,7 +97,7 @@ namespace EnergyStarZ
             {
                 HookManager.SubscribeToWindowEvents();
             }
-            
+
             EnergyManager.ThrottleAllUserBackgroundProcesses();
 
             // 运行系统托盘应用程序
@@ -106,19 +105,19 @@ namespace EnergyStarZ
 
             // 退出时取消后台任务
             cts.Cancel();
-            
+
             try
             {
                 // 等待后台任务完成（最多等待5秒）
-                await Task.WhenAny(houseKeepingTask, Task.Delay(TimeSpan.FromSeconds(5)));
+                houseKeepingTask.Wait(TimeSpan.FromSeconds(5));
             }
-            catch (TimeoutException)
+            catch (Exception)
             {
-                Console.WriteLine("Housekeeping thread did not respond to cancellation in time.");
+                Console.WriteLine($"[{DateTime.UtcNow:O}] Housekeeping thread did not respond to cancellation in time.");
             }
-            
+
             HookManager.UnsubscribeWindowEvents();
-            
+
             return 0;
         }
     }

@@ -23,9 +23,9 @@ namespace EnergyStarZ
         public event EventHandler<HotkeyEventArgs>? HotkeyPressed;
 
         // 快捷键相关的常量
-        private const int HOTKEY_ID_TOGGLE_MODE = 1001;
-        private const int HOTKEY_ID_PAUSE = 1002;
-        private const int HOTKEY_ID_RESUME = 1003;
+        public const int HotkeyIdToggleMode = 1001;
+        public const int HotkeyIdPause = 1002;
+        public const int HotkeyIdResume = 1003;
 
         public HiddenFormForHotkeys()
         {
@@ -42,13 +42,13 @@ namespace EnergyStarZ
         private void RegisterHotkeys()
         {
             // 注册 Ctrl+Alt+A 切换模式
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
+            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdToggleMode, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.A);
 
             // 注册 Ctrl+Alt+P 暂停
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_PAUSE, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
+            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdPause, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.P);
 
             // 注册 Ctrl+Alt+R 恢复
-            Interop.Win32Api.RegisterHotKey(Handle, HOTKEY_ID_RESUME, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
+            Interop.Win32Api.RegisterHotKey(Handle, HotkeyIdResume, Interop.Win32Api.HotKeyModifiers.Control | Interop.Win32Api.HotKeyModifiers.Alt, (uint)Keys.R);
         }
 
         protected override void WndProc(ref Message m)
@@ -74,9 +74,9 @@ namespace EnergyStarZ
             if (disposing)
             {
                 // 注销热键
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_TOGGLE_MODE);
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_PAUSE);
-                Interop.Win32Api.UnregisterHotKey(Handle, HOTKEY_ID_RESUME);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdToggleMode);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdPause);
+                Interop.Win32Api.UnregisterHotKey(Handle, HotkeyIdResume);
             }
             base.Dispose(disposing);
         }
