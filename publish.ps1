@@ -22,8 +22,7 @@ dotnet publish $projectPath `
     -c Release `
     -o $outputPath `
     --self-contained false `
-    -p:PublishSingleFile=true `
-    -p:EnableCompressionInSingleFile=true
+    -p:PublishSingleFile=true
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "`n发布成功！" -ForegroundColor Green
