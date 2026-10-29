@@ -406,6 +406,9 @@ FodyWeavers.xsd
 *.sln.iml
 .idea/
 
+# impeccable design hook cache
+.impeccable/
+
 ##
 ## Visual studio for Mac
 ##

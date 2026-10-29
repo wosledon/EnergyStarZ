@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnergyStarZ — Automatic energy efficiency for Windows</title>
+<meta name="description" content="EnergyStarZ keeps your foreground app fast by throttling background processes — saving battery on laptops and improving responsiveness on desktops.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0f14;
+    --bg-soft: #10161e;
+    --card: #131b25;
+    --border: #1f2b3a;
+    --text: #e6edf3;
+    --muted: #8b9bb0;
+    --accent: #3fd68c;
+    --accent-dim: #1f7a52;
+    --warn: #f0b429;
+    --code-bg: #0d141c;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Segoe UI Variable", Roboto, "Helvetica Neue", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- nav ---------- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(10px);
+    background: rgba(11, 15, 20, .82);
+    border-bottom: 1px solid var(--border);
+  }
+  nav { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 17px; color: var(--text); }
+  .brand:hover { text-decoration: none; }
+  .brand .bolt { color: var(--accent); font-size: 19px; }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; }
+  .nav-links a { color: var(--muted); }
+  .nav-links a:hover { color: var(--text); text-decoration: none; }
+  .lang { display: flex; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+  .lang button {
+    background: transparent; border: 0; color: var(--muted);
+    font: inherit; font-size: 12px; font-weight: 600;
+    padding: 5px 12px; cursor: pointer;
+  }
+  .lang button[aria-pressed="true"] { background: var(--accent-dim); color: #fff; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 84px 0 64px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% 20% auto; height: 420px;
+    background: radial-gradient(ellipse at top, rgba(63, 214, 140, .16), transparent 65%);
+    pointer-events: none;
+  }
+  .hero h1 {
+    margin: 0 0 6px; font-size: clamp(38px, 6vw, 60px); line-height: 1.1;
+    letter-spacing: -.02em;
+    background: linear-gradient(180deg, #fff, #9fb3c8);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero .tagline { font-size: clamp(17px, 2.4vw, 21px); color: var(--muted); max-width: 720px; margin: 14px auto 0; }
+  .hero .tagline strong { color: var(--text); font-weight: 600; }
+  .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 22px; border-radius: 10px; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--border); color: var(--text); background: var(--card);
+  }
+  .btn:hover { text-decoration: none; border-color: #33506b; transform: translateY(-1px); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #04150d; }
+  .btn.primary:hover { background: #55e099; }
+  .badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+  .badge {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--border);
+    background: var(--bg-soft); padding: 4px 11px; border-radius: 999px;
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 60px 0; border-top: 1px solid var(--border); }
+  section:first-of-type { border-top: 0; }
+  h2 { font-size: clamp(24px, 3.4vw, 32px); margin: 0 0 10px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); max-width: 760px; margin: 0 0 38px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(272px, 1fr)); gap: 18px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px 22px 20px;
+  }
+  .card h3 { margin: 0 0 8px; font-size: 16.5px; display: flex; align-items: center; gap: 9px; }
+  .card h3 .ico {
+    width: 30px; height: 30px; border-radius: 8px; flex: 0 0 auto;
+    display: grid; place-items: center; font-size: 15px;
+    background: rgba(63, 214, 140, .12); color: var(--accent);
+  }
+  .card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  /* ---------- tiers ---------- */
+  .tiers { display: grid; gap: 12px; }
+  .tier {
+    display: grid; grid-template-columns: 152px 1fr; gap: 4px 18px; align-items: start;
+    background: var(--bg-soft); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 18px 20px;
+  }
+  .tier-meta { display: flex; flex-direction: column; gap: 3px; }
+  .tier-name { font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 9px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
+  .tier.t2 .dot { background: var(--warn); }
+  .tier.t0 .dot { background: #64778d; }
+  .tier-sub { color: var(--muted); font-size: 12.5px; padding-left: 17px; }
+  .tier p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .tier code { color: #cfe3d8; background: var(--code-bg); padding: 1px 6px; border-radius: 5px; font-size: 12.5px; }
+
+  /* ---------- results ---------- */
+  .results { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; }
+  td:last-child, th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .good { color: var(--accent); font-weight: 700; }
+  .note { color: var(--muted); font-size: 13px; margin: 14px 0 0; }
+
+  /* ---------- config ---------- */
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; overflow-x: auto; font-size: 13.5px; line-height: 1.7; margin: 0;
+  }
+  pre .c { color: #6f859c; }
+  pre .k { color: #8fd0ff; }
+  pre .s { color: #a8e6bf; }
+
+  /* ---------- faq ---------- */
+  details {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 20px; margin-bottom: 12px;
+  }
+  summary { cursor: pointer; font-weight: 600; font-size: 15px; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+"; color: var(--accent); font-weight: 700; margin-right: 10px; }
+  details[open] summary::before { content: "−"; }
+  details p { margin: 12px 0 0; color: var(--muted); font-size: 14.5px; }
+
+  footer { border-top: 1px solid var(--border); padding: 34px 0 46px; color: var(--muted); font-size: 13.5px; }
+  footer .cols { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+
+  @media (max-width: 720px) {
+    .nav-links { display: none; }
+    .tier { grid-template-columns: 1fr; gap: 6px; }
+    .hero { padding: 60px 0 48px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .btn:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="#"><span class="bolt">⚡</span><span>EnergyStarZ</span></a>
+      <div class="nav-links">
+        <a href="#features" data-en="Features" data-zh="特性">Features</a>
+        <a href="#how" data-en="How it works" data-zh="工作原理">How it works</a>
+        <a href="#results" data-en="Benchmarks" data-zh="实测数据">Benchmarks</a>
+        <a href="#install" data-en="Install" data-zh="安装">Install</a>
+        <a href="#faq" data-en="FAQ" data-zh="常见问题">FAQ</a>
+      </div>
+      <div class="lang" role="group" aria-label="Language">
+        <button type="button" data-lang="en" aria-pressed="true">EN</button>
+        <button type="button" data-lang="zh" aria-pressed="false">中文</button>
+      </div>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ================= hero ================= -->
+  <div class="hero">
+    <h1>EnergyStarZ</h1>
+    <p class="tagline" data-en="Windows <strong>automatically throttles your background processes</strong> — so your foreground app stays fast. Saves battery on laptops, improves responsiveness on desktops." data-zh="让 Windows <strong>自动节流后台进程</strong>，前台应用因此保持流畅。笔记本上省电，台式机上更跟手。">
+      Windows <strong>automatically throttles your background processes</strong> — so your
+      foreground app stays fast. Saves battery on laptops, improves responsiveness on desktops.
+    </p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/wosledon/EnergyStarZ/releases/latest" data-en="⬇ Download latest release" data-zh="⬇ 下载最新版本">⬇ Download latest release</a>
+      <a class="btn" href="https://github.com/wosledon/EnergyStarZ" data-en="View on GitHub" data-zh="在 GitHub 上查看">View on GitHub</a>
+      <a class="btn" href="https://github.com/wosledon/EnergyStarZ#readme" data-en="Documentation" data-zh="使用文档">Documentation</a>
+    </div>
+    <div class="badges">
+      <span class="badge" data-en="Windows 11 24H2+" data-zh="Windows 11 24H2+">Windows 11 24H2+</span>
+      <span class="badge">.NET 10</span>
+      <span class="badge" data-en="x64 / x86" data-zh="x64 / x86">x64 / x86</span>
+      <span class="badge">MIT</span>
+      <span class="badge" data-en="v1.1.0" data-zh="v1.1.0">v1.1.0</span>
+    </div>
+  </div>
+
+  <!-- ================= features ================= -->
+  <section id="features">
+    <h2 data-en="What it does" data-zh="它能做什么">What it does</h2>
+    <p class="lede" data-en="EnergyStarZ watches which app you are actually using, and makes everything else get out of the way — CPU, disk and memory." data-zh="EnergyStarZ 监视你真正在用的应用，让其他所有程序在 CPU、磁盘和内存上立刻让路。">
+      EnergyStarZ watches which app you are actually using, and makes everything else get out of the way — CPU, disk and memory.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <h3><span class="ico">◎</span><span data-en="Foreground-aware" data-zh="前台感知">Foreground-aware</span></h3>
+        <p data-en="Listens for foreground window switches. The app you just switched to is boosted instantly; the one you left is throttled." data-zh="监听前台窗口切换。刚切过去的应用立即提速，离开的应用随即被节流。">
+          Listens for foreground window switches. The app you just switched to is boosted instantly; the one you left is throttled.
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▤</span><span data-en="Tiered throttling" data-zh="分层节流">Tiered throttling</span></h3>
+        <p data-en="Not a single on/off switch: EcoQoS + idle priority + background I/O + low memory priority, escalating to efficiency cores when needed." data-zh="不是简单的开/关：EcoQoS + 空闲优先级 + 后台 IO + 低内存优先级，必要时升级到能效核。">
+          Not a single on/off switch: EcoQoS + idle priority + background I/O + low memory priority, escalating to efficiency cores when needed.
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">⛨</span><span data-en="Safety first" data-zh="安全优先">Safety first</span></h3>
+        <p data-en="System processes, your whitelist, apps with visible windows, media playback, fullscreen video and recent apps are never throttled." data-zh="系统进程、白名单、有可见窗口的应用、正在播音的程序、全屏视频和最近使用过的应用永不节流。">
+          System processes, your whitelist, apps with visible windows, media playback, fullscreen video and recent apps are never throttled.
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">▣</span><span data-en="Tray &amp; hotkeys" data-zh="托盘与热键">Tray &amp; hotkeys</span></h3>
+        <p data-en="Lives in the system tray. Switch modes with Ctrl+Alt+A / P / R, or use the menu. English and Chinese included." data-zh="常驻系统托盘。用 Ctrl+Alt+A / P / R 切换模式，或使用菜单。内置中英文。">
+          Lives in the system tray. Switch modes with Ctrl+Alt+A / P / R, or use the menu. English and Chinese included.
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">↺</span><span data-en="Instant restore" data-zh="即时还原">Instant restore</span></h3>
+        <p data-en="Switch to an app and every restriction is removed immediately. Pause or fully disable at any time — everything is restored." data-zh="切回某个应用时所有限制立即解除。随时暂停或完全关闭——所有状态都会被还原。">
+          Switch to an app and every restriction is removed immediately. Pause or fully disable at any time — everything is restored.
+        </p>
+      </div>
+      <div class="card">
+        <h3><span class="ico">◔</span><span data-en="Tiny footprint" data-zh="极小占用">Tiny footprint</span></h3>
+        <p data-en="Process enumeration via a single Toolhelp32 snapshot, batched log writes, and a background writer thread. A few MB of RAM." data-zh="通过单次 Toolhelp32 快照枚举进程、日志批量落盘、独立写线程。仅占用数 MB 内存。">
+          Process enumeration via a single Toolhelp32 snapshot, batched log writes, and a background writer thread. A few MB of RAM.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= how it works ================= -->
+  <section id="how">
+    <h2 data-en="How it works" data-zh="工作原理">How it works</h2>
+    <p class="lede" data-en="Every background process is placed in a tier, and only the difference is applied when the tier changes." data-zh="每个后台进程被归入某一档，档位变化时只应用差异部分。">
+      Every background process is placed in a tier, and only the difference is applied when the tier changes.
+    </p>
+    <div class="tiers">
+      <div class="tier t0">
+        <div class="tier-meta">
+          <span class="tier-name"><span class="dot"></span><span data-en="Protected" data-zh="受保护">Protected</span></span>
+          <span class="tier-sub" data-en="never throttled" data-zh="永不节流">never throttled</span>
+        </div>
+        <p data-en="Hardcoded system processes · your <code>BypassProcessList</code> · the foreground app · recently used apps (LRU) · processes with a visible window · likely-playing-audio processes · fullscreen / presentation mode." data-zh="硬编码系统进程 · 你的 <code>BypassProcessList</code> · 前台应用 · 最近使用过的应用（LRU） · 有可见窗口的进程 · 可能正在播音的进程 · 全屏/演示模式。">
+          Hardcoded system processes · your <code>BypassProcessList</code> · the foreground app · recently used apps (LRU) · processes with a visible window · likely-playing-audio processes · fullscreen / presentation mode.
+        </p>
+      </div>
+      <div class="tier">
+        <div class="tier-meta">
+          <span class="tier-name"><span class="dot"></span><span data-en="Tier 1" data-zh="Tier 1">Tier 1</span></span>
+          <span class="tier-sub" data-en="default background" data-zh="默认后台">default background</span>
+        </div>
+        <p data-en="EcoQoS execution-speed throttle + <code>IDLE_PRIORITY_CLASS</code> with <code>PROCESS_MODE_BACKGROUND_BEGIN</code> (which also lowers I/O and memory scheduling) + low memory priority." data-zh="EcoQoS 执行速度节流 + <code>IDLE_PRIORITY_CLASS</code> 配合 <code>PROCESS_MODE_BACKGROUND_BEGIN</code>（同时压低 IO 与内存调度）+ 低内存优先级。">
+          EcoQoS execution-speed throttle + <code>IDLE_PRIORITY_CLASS</code> with <code>PROCESS_MODE_BACKGROUND_BEGIN</code> (which also lowers I/O and memory scheduling) + low memory priority.
+        </p>
+      </div>
+      <div class="tier t2">
+        <div class="tier-meta">
+          <span class="tier-name"><span class="dot"></span><span data-en="Tier 2" data-zh="Tier 2">Tier 2</span></span>
+          <span class="tier-sub" data-en="escalated" data-zh="升级档">escalated</span>
+        </div>
+        <p data-en="Tier 1 plus pinning to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, the battery is low, or the process still burns CPU after feedback measurement." data-zh="在 Tier 1 基础上绑定到混合架构 CPU 的能效核。触发条件：熄屏、用户长时间空闲、电量过低，或反馈测量发现该进程仍持续占用 CPU。">
+          Tier 1 plus pinning to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, the battery is low, or the process still burns CPU after feedback measurement.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= results ================= -->
+  <section id="results">
+    <h2 data-en="Measured, not promised" data-zh="用数据说话">Measured, not promised</h2>
+    <p class="lede" data-en="Numbers from a 16-core machine with saturated background load, measured with QueryProcessCycleTime." data-zh="数据来自 16 核机器、后台满载环境，使用 QueryProcessCycleTime 实测。">
+      Numbers from a 16-core machine with saturated background load, measured with <code>QueryProcessCycleTime</code>.
+    </p>
+    <div class="results">
+      <div class="card">
+        <h3 data-en="Background CPU under contention" data-zh="竞争下的后台 CPU">Background CPU under contention</h3>
+        <table>
+          <tr><th data-en="Configuration" data-zh="配置">Configuration</th><th data-en="Cycles" data-zh="CPU 周期">Cycles</th></tr>
+          <tr><td data-en="Baseline" data-zh="基线">Baseline</td><td>100%</td></tr>
+          <tr><td data-en="EcoQoS only" data-zh="仅 EcoQoS">EcoQoS only</td><td>~92%</td></tr>
+          <tr><td data-en="+ idle &amp; background mode" data-zh="+ 空闲与后台模式">+ idle &amp; background mode</td><td class="good">28%</td></tr>
+          <tr><td data-en="+ low memory priority" data-zh="+ 低内存优先级">+ low memory priority</td><td class="good">3.7%</td></tr>
+          <tr><td data-en="Restored" data-zh="还原后">Restored</td><td>100%</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3 data-en="Foreground responsiveness" data-zh="前台响应速度">Foreground responsiveness</h3>
+        <table>
+          <tr><th data-en="Wake-up latency" data-zh="唤醒延迟">Wake-up latency</th><th data-en="Before" data-zh="节流前">Before</th><th data-en="After" data-zh="节流后">After</th></tr>
+          <tr><td>p50</td><td>16.7ms</td><td class="good">15.1ms</td></tr>
+          <tr><td>p99</td><td>29.2ms</td><td class="good">16.2ms</td></tr>
+          <tr><td data-en="max" data-zh="最大值">max</td><td>31.3ms</td><td class="good">16.3ms</td></tr>
+        </table>
+        <p class="note" data-en="A 16ms p99 means a steady 60fps; 29ms means roughly one dropped frame in eight. Background processes still used 95.6% of their previous CPU — they finish their work, they just get out of the way." data-zh="16ms 的 p99 意味着稳定 60fps；29ms 则大约每 8 帧丢 1 帧。而后台进程仍消耗原有 95.6% 的 CPU——活照样干完，只是不再挡路。">
+          A 16ms p99 means a steady 60fps; 29ms means roughly one dropped frame in eight. Background processes still used 95.6% of their previous CPU — they finish their work, they just get out of the way.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= install ================= -->
+  <section id="install">
+    <h2 data-en="Install" data-zh="安装">Install</h2>
+    <p class="lede" data-en="Windows 11 24H2 (build 26100) or later. Two builds per architecture:" data-zh="需要 Windows 11 24H2（build 26100）或更高版本。每种架构提供两种构建：">
+      Windows 11 24H2 (build 26100) or later. Two builds per architecture:
+    </p>
+    <div class="grid">
+      <div class="card">
+        <h3 data-en="Self-contained" data-zh="自带运行时">Self-contained</h3>
+        <p data-en="Bundles the .NET runtime — no prerequisites. Largest download. Pick EnergyStarZ-x64-SelfContained-*.zip or the x86 build." data-zh="内置 .NET 运行时，无需任何前置条件。体积最大。选择 EnergyStarZ-x64-SelfContained-*.zip 或 x86 构建。">
+          Bundles the .NET runtime — no prerequisites. Largest download. Pick <code>EnergyStarZ-x64-SelfContained-*.zip</code> or the x86 build.
+        </p>
+      </div>
+      <div class="card">
+        <h3 data-en="Framework-dependent" data-zh="框架依赖">Framework-dependent</h3>
+        <p data-en="Requires the .NET 10 desktop runtime, but is much smaller and updates with the runtime." data-zh="需要 .NET 10 桌面运行时，但体积小得多，并随运行时一起更新。">
+          Requires the .NET 10 desktop runtime, but is much smaller and updates with the runtime.
+        </p>
+      </div>
+    </div>
+    <p class="note" data-en="Unzip anywhere and run EnergyStarZ.exe — it appears in the system tray. Edit appsettings.json next to the exe to configure, then use “Reload Configuration” in the tray menu." data-zh="解压到任意位置运行 EnergyStarZ.exe 即可，图标会出现在系统托盘。编辑 exe 旁边的 appsettings.json 进行配置，然后在托盘菜单中选择“重载配置”。">
+      Unzip anywhere and run <code>EnergyStarZ.exe</code> — it appears in the system tray. Edit <code>appsettings.json</code> next to the exe to configure, then use “Reload Configuration” in the tray menu.
+    </p>
+  </section>
+
+  <!-- ================= config ================= -->
+  <section id="config">
+    <h2 data-en="Configuration" data-zh="配置">Configuration</h2>
+    <p class="lede" data-en="A few of the most useful keys in appsettings.json — the full list is in the README." data-zh="appsettings.json 中最常用的几个键——完整列表见 README。">
+      A few of the most useful keys in <code>appsettings.json</code> — the full list is in the README.
+    </p>
+<pre><span class="c">// appsettings.json</span>
+{
+  <span class="k">"AppSettings"</span>: {
+    <span class="k">"Enabled"</span>: <span class="s">true</span>,              <span class="c">// master switch — false = fully dormant</span>
+    <span class="k">"InitialMode"</span>: <span class="s">"Auto"</span>,        <span class="c">// Auto | Manual | Paused</span>
+    <span class="k">"ScanIntervalMinutes"</span>: <span class="s">10</span>,
+    <span class="k">"EnableAutoPowerMode"</span>: <span class="s">false</span>, <span class="c">// aggressive profile on battery</span>
+    <span class="k">"PauseOnAcPower"</span>: <span class="s">false</span>,      <span class="c">// true = stop entirely on AC</span>
+    <span class="k">"EnableEfficiencyCoreBinding"</span>: <span class="s">true</span>,
+    <span class="k">"EnableLowMemoryPriority"</span>: <span class="s">true</span>,
+    <span class="k">"DeepModeIdleMinutes"</span>: <span class="s">5</span>,
+    <span class="k">"BypassProcessList"</span>: [ <span class="s">"myapp.exe"</span> ]
+  }
+}</pre>
+  </section>
+
+  <!-- ================= faq ================= -->
+  <section id="faq">
+    <h2 data-en="FAQ" data-zh="常见问题">FAQ</h2>
+    <p class="lede" data-en="Short answers to the questions that come up most." data-zh="最常见问题的简短回答。">
+      Short answers to the questions that come up most.
+    </p>
+
+    <details open>
+      <summary data-en="Does it help on a desktop, or a laptop plugged into power?" data-zh="台式机或笔记本接电源时也有用吗？">Does it help on a desktop, or a laptop plugged into power?</summary>
+      <p data-en="Yes — the benefit shifts from battery life to responsiveness. Background processes yield CPU, disk and memory the moment your foreground app needs them. Measured wake-up latency p99 dropped from 29.2ms to 16.2ms, while background processes still got 95.6% of their previous CPU time. On hybrid Intel desktops, efficiency-core binding also keeps the P-cores free for your game." data-zh="有——收益从省电转向流畅度。后台进程在前台应用需要资源的瞬间立刻让位。实测唤醒延迟 p99 从 29.2ms 降到 16.2ms，而后台进程仍获得原有 95.6% 的 CPU 时间。在混合架构的 Intel 台式机上，能效核绑定还能把 P 核留给游戏。">
+        Yes — the benefit shifts from battery life to responsiveness. Background processes yield CPU, disk and memory the moment your foreground app needs them. Measured wake-up latency p99 dropped from 29.2ms to 16.2ms, while background processes still got 95.6% of their previous CPU time. On hybrid Intel desktops, efficiency-core binding also keeps the P-cores free for your game.
+      </p>
+    </details>
+
+    <details>
+      <summary data-en="Will it slow down my downloads, builds or antivirus?" data-zh="会拖慢我的下载、编译或杀毒软件吗？">Will it slow down my downloads, builds or antivirus?</summary>
+      <p data-en="They run in background mode, so they finish slower when the system is busy — that is the trade-off that keeps your foreground app smooth. Anything with a visible window, anything you used recently, and anything in your whitelist is exempt. On AC power the gentlest lever (low memory priority) is off by default." data-zh="它们会以后台模式运行，系统繁忙时完成得更慢——这是保持前台流畅的代价。有可见窗口的程序、你最近用过的程序以及白名单中的程序都不受影响。交流电下默认还会关闭最激进的低内存优先级。">
+        They run in background mode, so they finish slower when the system is busy — that is the trade-off that keeps your foreground app smooth. Anything with a visible window, anything you used recently, and anything in your whitelist is exempt. On AC power the gentlest lever (low memory priority) is off by default.
+      </p>
+    </details>
+
+    <details>
+      <summary data-en="How do I turn it off completely?" data-zh="如何完全关闭？">How do I turn it off completely?</summary>
+      <p data-en="Two ways: untick “Energy Management” in the tray menu (instant, restores everything), or set &quot;Enabled&quot;: false in appsettings.json (the app starts fully dormant and also cleans up anything left over from a previous run). Paused mode is the lighter option — no throttling, but the app stays warm for an instant resume." data-zh="两种方式：在托盘菜单中取消勾选“节能管理”（立即生效并还原所有状态），或在 appsettings.json 中设置 &quot;Enabled&quot;: false（应用完全休眠启动，并清理上次运行可能残留的状态）。“暂停模式”是更轻的选择——不节流，但保持热启动以便瞬间恢复。">
+        Two ways: untick “Energy Management” in the tray menu (instant, restores everything), or set "Enabled": false in appsettings.json (the app starts fully dormant and also cleans up anything left over from a previous run). Paused mode is the lighter option — no throttling, but the app stays warm for an instant resume.
+      </p>
+    </details>
+
+    <details>
+      <summary data-en="Is it safe? What about my music or a video call?" data-zh="安全吗？听音乐或视频通话会受影响吗？">Is it safe? What about my music or a video call?</summary>
+      <p data-en="Critical system processes are hardcoded as protected. Processes with a visible window are never throttled, and common media/communication apps are exempt by default (configurable via AudibleProcessList). Fullscreen video and presentation mode are detected and respected. Switching to any app restores it instantly." data-zh="关键系统进程已硬编码保护。有可见窗口的进程永不节流，常见媒体/通讯应用默认豁免（可通过 AudibleProcessList 配置）。全屏视频与演示模式会被检测并尊重。切换到任何应用都会立即还原它。">
+        Critical system processes are hardcoded as protected. Processes with a visible window are never throttled, and common media/communication apps are exempt by default (configurable via <code>AudibleProcessList</code>). Fullscreen video and presentation mode are detected and respected. Switching to any app restores it instantly.
+      </p>
+    </details>
+
+    <details>
+      <summary data-en="Why does it require Windows 11 24H2?" data-zh="为什么要求 Windows 11 24H2？">Why does it require Windows 11 24H2?</summary>
+      <p data-en="The efficiency-mode and power-throttling APIs it relies on only behave correctly from build 26100 onwards. On older builds the app shows a message and exits instead of misbehaving." data-zh="它所依赖的效率模式与电源节流 API 从 build 26100 起才能正确工作。在更旧的版本上，应用会提示并退出，而不是错误运行。">
+        The efficiency-mode and power-throttling APIs it relies on only behave correctly from build 26100 onwards. On older builds the app shows a message and exits instead of misbehaving.
+      </p>
+    </details>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap cols">
+    <span data-en="EnergyStarZ · MIT License" data-zh="EnergyStarZ · MIT 许可证">EnergyStarZ · MIT License</span>
+    <span data-en="Based on the original <a href='https://github.com/imbushuo/EnergyStar'>EnergyStar</a> by imbushuo" data-zh="基于 imbushuo 的原始 <a href='https://github.com/imbushuo/EnergyStar'>EnergyStar</a> 项目">Based on the original <a href="https://github.com/imbushuo/EnergyStar">EnergyStar</a> by imbushuo</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var buttons = document.querySelectorAll('.lang button');
+  var nodes = document.querySelectorAll('[data-en]');
+
+  function apply(lang) {
+    nodes.forEach(function (el) {
+      var text = el.getAttribute('data-' + lang);
+      if (text) { el.innerHTML = text; }
+    });
+    document.documentElement.setAttribute('lang', lang === 'zh' ? 'zh-CN' : 'en');
+    buttons.forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.lang === lang));
+    });
+    try { localStorage.setItem('esz-lang', lang); } catch (e) {}
+  }
+
+  buttons.forEach(function (b) {
+    b.addEventListener('click', function () { apply(b.dataset.lang); });
+  });
+
+  var saved = null;
+  try { saved = localStorage.getItem('esz-lang'); } catch (e) {}
+  if (!saved) {
+    saved = (navigator.language || '').toLowerCase().indexOf('zh') === 0 ? 'zh' : 'en';
+  }
+  apply(saved);
+})();
+</script>
+
+</body>
+</html>
