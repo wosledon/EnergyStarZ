@@ -28,24 +28,28 @@ jobs:
           - arch: x64
             runtime: win-x64
             self_contained: true
+            compress: true
             label: x64-SelfContained
           
           # x64 框架依赖
           - arch: x64
             runtime: win-x64
             self_contained: false
+            compress: false
             label: x64-FrameworkDependent
           
           # x86 自带运行时
           - arch: x86
             runtime: win-x86
             self_contained: true
+            compress: true
             label: x86-SelfContained
           
           # x86 框架依赖
           - arch: x86
             runtime: win-x86
             self_contained: false
+            compress: false
             label: x86-FrameworkDependent
 
     steps:
@@ -75,13 +79,8 @@ jobs:
             -p:PublishSingleFile=true `
             -p:PublishTrimmed=false `
             -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:DebugType=none `
-            -p:EnableCompressionInSingleFile=true
-
-      - name: Copy config files
-        run: |
-          Copy-Item "src/EnergyStarZ/appsettings.json" "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/" -Force
-          Copy-Item "src/EnergyStarZ/Resources/Localization.json" "${{ env.OUTPUT_DIR }}/${{ matrix.label }}/Resources/" -Force
+            -p:EnableCompressionInSingleFile=${{ matrix.compress }} `
+            -p:DebugType=none
 
       - name: Create ZIP archive
         run: |

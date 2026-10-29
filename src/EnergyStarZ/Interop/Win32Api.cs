@@ -1,5 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Security;
 using System.Text;
 
 namespace EnergyStarZ.Interop
@@ -18,9 +17,27 @@ namespace EnergyStarZ.Interop
             [Out] StringBuilder lpExeName, 
             ref int lpdwSize);
 
-        // 添加宽字符版本的API
+        // 进程快照相关 API：用于低成本枚举进程，避免 Process.GetProcesses()
+        // 为每个进程分配托管对象
+        public const uint TH32CS_SNAPPROCESS = 0x00000002;
+        private static readonly IntPtr InvalidHandleValue = new(-1);
+
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern bool QueryFullProcessImageNameW([In] IntPtr hProcess, [In] int dwFlags, [Out] StringBuilder lpExeName, ref int lpdwSize);
+        public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool Process32FirstW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        public static extern bool Process32NextW(IntPtr hSnapshot, ref PROCESSENTRY32W lppe);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool ProcessIdToSessionId(uint dwProcessId, out uint pSessionId);
+
+        public static bool IsValidSnapshotHandle(IntPtr handle)
+        {
+            return handle != IntPtr.Zero && handle != InvalidHandleValue;
+        }
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         public static extern bool SetProcessInformation([In] IntPtr hProcess,
@@ -30,7 +47,6 @@ namespace EnergyStarZ.Interop
         public static extern bool SetPriorityClass(IntPtr handle, PriorityClass priorityClass);
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
-        [SuppressUnmanagedCodeSecurity]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool CloseHandle(IntPtr hObject);
 
@@ -99,6 +115,23 @@ namespace EnergyStarZ.Interop
             public uint Version;
             public ProcessorPowerThrottlingFlags ControlMask;
             public ProcessorPowerThrottlingFlags StateMask;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct PROCESSENTRY32W
+        {
+            public uint dwSize;
+            public uint cntUsage;
+            public uint th32ProcessID;
+            public IntPtr th32DefaultHeapID;
+            public uint th32ModuleID;
+            public uint cntThreads;
+            public uint th32ParentProcessID;
+            public int pcPriClassBase;
+            public uint dwFlags;
+
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string szExeFile;
         }
         
         // 热键相关的 P/Invoke 声明

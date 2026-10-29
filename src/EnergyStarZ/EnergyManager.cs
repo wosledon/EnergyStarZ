@@ -70,8 +70,8 @@ namespace EnergyStarZ
 
         // 使用LRU缓存来防止频繁切换，通过 _lruLock 保证线程安全
         private static readonly object _lruLock = new();
-        private static readonly LinkedList<(uint pid, string name, DateTime lastAccess, int weight)> _recentlyUsedApps = new();
-        private static readonly Dictionary<uint, LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>> _appLookup = new();
+        private static readonly LinkedList<(uint pid, string name, DateTime lastAccess)> _recentlyUsedApps = new();
+        private static readonly Dictionary<uint, LinkedListNode<(uint pid, string name, DateTime lastAccess)>> _appLookup = new();
         private static int _lruCacheSize = 5;
         private static int _minLRUSize = 3;
         private static int _maxLRUSize = 15;
@@ -140,10 +140,20 @@ namespace EnergyStarZ
 
         public static void LoadConfiguration()
         {
+            LoadConfiguration(new AppSettings());
+        }
+
+        /// <summary>
+        /// 重新加载配置并原地应用到指定实例。
+        /// 重载配置时传入调用方持有的同一个实例，使其能看到最新值
+        /// （例如 HouseKeeping 定时器的扫描间隔）
+        /// </summary>
+        public static void LoadConfiguration(AppSettings settings)
+        {
             try
             {
                 var config = ConfigurationHelper.LoadConfiguration();
-                var settings = ConfigurationHelper.GetAppSettings(config);
+                config.GetSection("AppSettings").Bind(settings);
 
                 lock (_bypassListLock)
                 {
@@ -170,6 +180,9 @@ namespace EnergyStarZ
                 }
 
                 _switchDebounceMs = settings.SwitchDebounceMs > 0 ? settings.SwitchDebounceMs : DefaultSwitchDebounceMs;
+
+                // 使 EnableLogging 配置真正生效
+                AppLogger.Enabled = settings.EnableLogging;
             }
             catch (Exception ex)
             {
@@ -392,13 +405,11 @@ namespace EnergyStarZ
         {
             lock (_lruLock)
             {
-                DateTime now = DateTime.UtcNow;
-                int newWeight = 1;
+                var now = DateTime.UtcNow;
 
                 if (_appLookup.TryGetValue(pid, out var node))
                 {
                     _recentlyUsedApps.Remove(node);
-                    newWeight = node.Value.weight + 1;
                 }
                 else if (_recentlyUsedApps.Count >= _lruCacheSize)
                 {
@@ -410,7 +421,7 @@ namespace EnergyStarZ
                     }
                 }
 
-                var newNode = new LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>((pid, name, now, newWeight));
+                var newNode = new LinkedListNode<(uint pid, string name, DateTime lastAccess)>((pid, name, now));
                 _recentlyUsedApps.AddFirst(newNode);
                 _appLookup[pid] = newNode;
 
@@ -427,21 +438,6 @@ namespace EnergyStarZ
             lock (_lruLock)
             {
                 return _appLookup.ContainsKey(pid);
-            }
-        }
-
-        private static void UpdateAppAccessTime(uint pid)
-        {
-            lock (_lruLock)
-            {
-                if (_appLookup.TryGetValue(pid, out var node))
-                {
-                    var updatedValue = (node.Value.pid, node.Value.name, DateTime.UtcNow, node.Value.weight + 1);
-                    _recentlyUsedApps.Remove(node);
-                    var newNode = new LinkedListNode<(uint pid, string name, DateTime lastAccess, int weight)>(updatedValue);
-                    _recentlyUsedApps.AddFirst(newNode);
-                    _appLookup[pid] = newNode;
-                }
             }
         }
 
@@ -579,60 +575,76 @@ namespace EnergyStarZ
 
         private static void RefreshProcessCache()
         {
-            Process[]? processes = null;
-            try
+            var snapshot = Interop.Win32Api.CreateToolhelp32Snapshot(
+                Interop.Win32Api.TH32CS_SNAPPROCESS, 0);
+
+            if (!Interop.Win32Api.IsValidSnapshotHandle(snapshot))
             {
-                processes = Process.GetProcesses();
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error($"Failed to get processes: {ex.Message}");
+                AppLogger.Error($"Failed to create process snapshot: {Marshal.GetLastWin32Error()}");
                 return;
             }
 
-            var activeIds = new HashSet<int>(processes.Length);
-
-            foreach (var proc in processes)
+            try
             {
-                try
+                var entry = new Interop.Win32Api.PROCESSENTRY32W
                 {
-                    if (proc.SessionId != CurrentSessionId)
+                    dwSize = (uint)Marshal.SizeOf<Interop.Win32Api.PROCESSENTRY32W>()
+                };
+
+                if (!Interop.Win32Api.Process32FirstW(snapshot, ref entry))
+                {
+                    AppLogger.Error($"Process32FirstW failed: {Marshal.GetLastWin32Error()}");
+                    return;
+                }
+
+                var activeIds = new HashSet<int>();
+
+                do
+                {
+                    var pid = entry.th32ProcessID;
+                    if (pid == 0)
+                        continue;
+
+                    // 只关心当前会话的进程
+                    if (!Interop.Win32Api.ProcessIdToSessionId(pid, out var sessionId) ||
+                        sessionId != (uint)CurrentSessionId)
                     {
                         continue;
                     }
 
-                    activeIds.Add(proc.Id);
+                    activeIds.Add((int)pid);
 
-                    var procName = proc.ProcessName + ".exe";
-                    if (!ProcessCache.ContainsKey(proc.Id))
+                    // 快照中的名称已包含 .exe 扩展名
+                    var procName = entry.szExeFile;
+                    if (string.IsNullOrEmpty(procName))
+                        continue;
+
+                    if (!ProcessCache.ContainsKey((int)pid))
                     {
-                        ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, procName));
+                        ProcessCache.TryAdd((int)pid, new ProcessInfo((int)pid, procName));
                     }
                     else
                     {
-                        var existing = ProcessCache[proc.Id];
+                        var existing = ProcessCache[(int)pid];
                         if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
                         {
-                            ProcessCache[proc.Id] = new ProcessInfo(proc.Id, procName);
+                            ProcessCache[(int)pid] = new ProcessInfo((int)pid, procName);
                         }
                     }
                 }
-                catch
+                while (Interop.Win32Api.Process32NextW(snapshot, ref entry));
+
+                foreach (var kvp in ProcessCache)
                 {
-                    // 忽略单个进程的异常
-                }
-                finally
-                {
-                    proc.Dispose();
+                    if (!activeIds.Contains(kvp.Key))
+                    {
+                        ProcessCache.TryRemove(kvp.Key, out _);
+                    }
                 }
             }
-
-            foreach (var kvp in ProcessCache)
+            finally
             {
-                if (!activeIds.Contains(kvp.Key))
-                {
-                    ProcessCache.TryRemove(kvp.Key, out _);
-                }
+                Interop.Win32Api.CloseHandle(snapshot);
             }
         }
 
@@ -644,17 +656,21 @@ namespace EnergyStarZ
         {
             var processSnapshot = processes.ToList();
 
+            // 一次性快照保护列表：避免逐个加锁，也避免重载配置时的竞态
+            HashSet<string> bypassSnapshot;
+            lock (_bypassListLock)
+            {
+                bypassSnapshot = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
+            }
+
             foreach (var procInfo in processSnapshot)
             {
                 if (procInfo.Id == excludePid1 || procInfo.Id == excludePid2)
                     continue;
 
                 // 检查保护列表（系统进程）
-                lock (_bypassListLock)
-                {
-                    if (_bypassProcessList.Contains(procInfo.Name))
-                        continue;
-                }
+                if (bypassSnapshot.Contains(procInfo.Name))
+                    continue;
 
                 // 检查 LRU 缓存（最近使用的应用优先恢复）
                 if (IsAppInRecentList((uint)procInfo.Id))
@@ -847,9 +863,9 @@ namespace EnergyStarZ
                 }
 
                 // 防抖：距离上次切换太近则跳过
+                // （AddOrUpdateApp 已刷新该应用的访问时间，无需重复处理）
                 if (timeSinceLastSwitch < TimeSpan.FromMilliseconds(_switchDebounceMs))
                 {
-                    UpdateAppAccessTime(actualProcId);
                     return;
                 }
 

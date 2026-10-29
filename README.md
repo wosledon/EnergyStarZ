@@ -9,7 +9,7 @@ EnergyStarZ is a high-performance energy efficiency manager for Windows that aut
 - **Automatic Power Management**: Automatically detects foreground applications and applies efficiency settings to background processes
 - **Three Operation Modes**:
   - Auto Mode: Automatically adjusts based on foreground applications
-  - Manual Mode: Allows manual control over power settings
+  - Manual Mode: Stops reacting to foreground switches; background processes are still throttled periodically
   - Paused Mode: Disables all power management
 - **System Tray Interface**: Convenient access through system tray icon
 - **Hotkey Support**: Quick mode switching with keyboard shortcuts
