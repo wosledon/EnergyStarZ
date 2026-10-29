@@ -64,12 +64,28 @@ EnergyStarZ 是一款为 Windows 设计的高性能能源效率管理器，通�
 - `LRUCacheSize`：保持不节流的最近使用应用数量（默认：5）
 - `LRUDecayMinutes`：LRU 条目闲置多久后过期（默认：5）
 - `LRUMinSize` / `LRUMaxSize`：LRU 大小自动调整的上下限（默认：3 / 15）
+- `AudibleProcessList`：被视为"可能正在播音"而永不节流的进程名单（启发式）
+- `EnableEfficiencyCoreBinding`：混合架构 CPU 上把被节流进程绑定到能效核（探测失败时自动禁用，默认：true）
+- `EnableLowMemoryPriority`：对被节流进程设置低内存优先级（效果很强，但可能让内存密集型后台程序明显变慢，默认：true）
+- `DeepModeIdleMinutes`：用户空闲多少分钟后进入深度节流模式（默认：5）
+- `LowBatteryEscalatePercent`：电量低于该百分比时提升节流强度（默认：20）
 
 ## 工作原理
 
 EnergyStarZ 监控前台应用程序切换，并对后台进程应用电源限制。当前台应用程序变为活动状态时，它会获得更高的优先级和性能。后台进程会被限制以节省能源。
 
 应用程序使用 Windows 的 PROCESS_POWER_THROTTLING API 控制进程执行速度，并调整进程优先级以优化能源消耗。
+
+### 分层节流策略
+
+节流不再是单一的"开/关"，而是分层施加；每个后台进程被归入某一档，档位变化时只应用差异部分：
+
+- **受保护（永不节流）**：硬编码系统进程、`BypassProcessList`、前台/待处理应用、LRU 最近使用应用、拥有可见顶层窗口的进程、`AudibleProcessList` 中的进程，以及处于全屏/演示模式时的相关进程。
+- **Tier 1（默认后台）**：EcoQoS 执行速度节流 + `IDLE_PRIORITY_CLASS | PROCESS_MODE_BACKGROUND_BEGIN`（同时压低 IO 与内存调度）+ 低内存优先级。
+- **Tier 2（升级档）**：在 Tier 1 基础上把进程绑定到能效核（仅混合架构 CPU）。触发条件：熄屏、用户长时间空闲、电量过低，或反馈测量（`QueryProcessCycleTime`）发现该进程仍持续占用 CPU。
+- **还原**：清除全部控制（EcoQoS 关闭、恢复正常优先级、退出后台模式、释放 CPU set 绑定）。
+
+在 16 核机器上、有 CPU 竞争的环境实测：Tier 1 可把繁忙后台进程的 CPU 周期降到约 28%，叠加低内存优先级后约 4%，退出时完全恢复。
 
 ## 系统要求
 

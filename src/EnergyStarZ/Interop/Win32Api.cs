@@ -87,7 +87,6 @@ namespace EnergyStarZ.Interop
             ProcessLeapSecondInfo,
             ProcessInformationClassMax,
         }
-
         [Flags]
         public enum ProcessorPowerThrottlingFlags : uint
         {
@@ -140,6 +139,107 @@ namespace EnergyStarZ.Interop
 
         [DllImport("user32.dll")]
         public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+        // 顶层可见窗口枚举：用于判断进程是否“有用户可见界面”
+        public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lparam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hWnd);
+
+        // 用户空闲检测
+        [StructLayout(LayoutKind.Sequential)]
+        public struct LASTINPUTINFO
+        {
+            public uint cbSize;
+            public uint dwTime;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+        // CPU sets：用于把后台进程限制在能效核（混合架构 CPU）
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetSystemCpuSetInformation(IntPtr Information, uint BufferLength, ref uint ReturnedLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetProcessDefaultCpuSets(IntPtr Process, uint[]? CpuSetIds, uint CpuSetIdCount, IntPtr DefaultCpuSetIds);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetProcessDefaultCpuSets(IntPtr Process, uint[]? CpuSetIds, uint CpuSetIdCount, ref uint RequiredCount);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool QueryProcessCycleTime(IntPtr hProcess, out ulong CycleTime);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_CPU_SET_INFORMATION
+        {
+            public uint Size;
+            public int Type;
+            public CPU_SET_INFORMATION_UNION Union;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        public struct CPU_SET_INFORMATION_UNION
+        {
+            [FieldOffset(0)] public CPU_SET_INFORMATION CpuSet;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CPU_SET_INFORMATION
+        {
+            public uint Id;
+            public ushort Group;
+            public ushort LogicalProcessorIndex;
+            public byte CoreIndex;
+            public byte LastLevelCacheIndex;
+            public byte NumaNodeIndex;
+            public byte EfficiencyClass;
+            public byte AllFlags;
+            public byte Reserved;
+            public ushort SchedulingClass;
+            public ulong AllocationSize;
+        }
+
+        // 屏幕电源通知（熄屏进入深度模式）
+        public static readonly Guid GUID_MONITOR_POWER_ON = new("02731015-4510-4526-99E6-E5A17EBD1AEA");
+
+        public const int DEVICE_NOTIFY_WINDOW_HANDLE = 0x00000000;
+        public const int WM_POWERBROADCAST = 0x0218;
+        public const int PBT_POWERSETTINGCHANGE = 0x8013;
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        public struct POWERBROADCAST_SETTING
+        {
+            public Guid PowerSetting;
+            public uint DataLength;
+            public byte Data;
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr RegisterPowerSettingNotification(IntPtr hRecipient, ref Guid PowerSettingGuid, int Flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern bool UnregisterPowerSettingNotification(IntPtr Handle);
+
+        // 用户通知状态：检测全屏播放/演示模式
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out QUERY_USER_NOTIFICATION_STATE pquns);
+
+        public enum QUERY_USER_NOTIFICATION_STATE
+        {
+            QUNS_NOT_PRESENT = 1,
+            QUNS_BUSY = 2,
+            QUNS_RUNNING_DISPLAY_REQUIRED = 3,
+            QUNS_PRESENTATION_MODE = 4,
+            QUNS_ACCEPTS_NOTIFICATIONS = 5,
+            QUNS_QUIET_TIME = 6,
+        }
 
         // 定义热键修饰符枚举
         [Flags]

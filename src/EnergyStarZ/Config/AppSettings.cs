@@ -21,6 +21,37 @@ namespace EnergyStarZ.Config
         public string LogLevel { get; set; } = "Information";
         public string InitialMode { get; set; } = "Auto";
         public List<string> BypassProcessList { get; set; } = new List<string>();
+
+        /// <summary>
+        /// 可能正在播音的进程名单（启发式豁免，避免节流导致音频卡顿）
+        /// </summary>
+        public List<string> AudibleProcessList { get; set; } = new List<string>
+        {
+            "spotify.exe", "music.ui.exe", "vlc.exe", "wmplayer.exe", "foobar2000.exe",
+            "qqmusic.exe", "cloudmusic.exe", "kugou.exe", "audiodg.exe",
+            "zoom.exe", "teams.exe", "discord.exe", "wechat.exe", "qq.exe",
+            "tim.exe", "dingtalk.exe", "lark.exe", "feishu.exe", "slack.exe",
+        };
+
+        /// <summary>
+        /// 混合架构 CPU 上把后台进程绑定到能效核（探测失败时自动禁用）
+        /// </summary>
+        public bool EnableEfficiencyCoreBinding { get; set; } = true;
+
+        /// <summary>
+        /// 对被节流进程设置低内存优先级（效果很强，但可能导致内存密集型后台程序明显变慢）
+        /// </summary>
+        public bool EnableLowMemoryPriority { get; set; } = true;
+
+        /// <summary>
+        /// 用户空闲多少分钟后进入深度模式（更激进节流）
+        /// </summary>
+        public int DeepModeIdleMinutes { get; set; } = 5;
+
+        /// <summary>
+        /// 电量低于该百分比时提升一档节流强度
+        /// </summary>
+        public int LowBatteryEscalatePercent { get; set; } = 20;
         
         public int LRUCacheSize 
         { 

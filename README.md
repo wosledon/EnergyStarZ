@@ -64,12 +64,28 @@ Edit `appsettings.json` to customize:
 - `LRUCacheSize`: Number of recently used apps kept unthrottled (default: 5)
 - `LRUDecayMinutes`: Idle time before an LRU entry expires (default: 5)
 - `LRUMinSize` / `LRUMaxSize`: Bounds for automatic LRU size adjustment (default: 3 / 15)
+- `AudibleProcessList`: Processes treated as "possibly playing audio" and never throttled (heuristic)
+- `EnableEfficiencyCoreBinding`: Pin throttled processes to efficiency cores on hybrid CPUs (auto-disabled when undetectable, default: true)
+- `EnableLowMemoryPriority`: Apply low memory priority to throttled processes (very effective, may slow memory-heavy background apps, default: true)
+- `DeepModeIdleMinutes`: Idle time before entering deep throttling mode (default: 5)
+- `LowBatteryEscalatePercent`: Battery level below which throttling is escalated (default: 20)
 
 ## How It Works
 
 EnergyStarZ monitors foreground application switches and applies power throttling to background processes. When a process becomes the foreground application, it receives higher priority and performance. Background processes are throttled to conserve energy.
 
 The application uses Windows' PROCESS_POWER_THROTTLING API to control process execution speed and adjusts process priorities to optimize energy consumption.
+
+### Tiered throttling policy
+
+Throttling is layered instead of a single on/off switch. Each background process is placed in a tier, and only the difference is applied when the tier changes:
+
+- **Protected (never throttled)**: hardcoded system processes, `BypassProcessList`, the foreground/pending app, LRU recently-used apps, processes with a visible top-level window, processes in `AudibleProcessList`, and anything in fullscreen/presentation mode.
+- **Tier 1** (default background): EcoQoS execution-speed throttle + `IDLE_PRIORITY_CLASS | PROCESS_MODE_BACKGROUND_BEGIN` (which also lowers I/O and memory scheduling) + low memory priority.
+- **Tier 2** (escalated): Tier 1 plus binding to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, battery is low, or the process still burns CPU after feedback measurement (`QueryProcessCycleTime`).
+- **Restore**: all controls are cleared (EcoQoS off, normal priority, background mode end, CPU sets released).
+
+Measured under CPU contention on a 16-core machine, Tier 1 reduced a busy background process to ~28% of its cycles, and adding low memory priority brought it to ~4%, with full restoration afterwards.
 
 ## Requirements
 

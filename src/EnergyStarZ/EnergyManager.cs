@@ -92,7 +92,7 @@ namespace EnergyStarZ
 
         private static readonly int CurrentSessionId = Process.GetCurrentProcess().SessionId;
 
-        private static readonly ConcurrentDictionary<int, ProcessInfo> ProcessCache = new();
+        private static readonly ConcurrentDictionary<int, ProcessState> ProcessCache = new();
 
         // 后台任务
         private static CancellationTokenSource? _backgroundTasksCts;
@@ -101,6 +101,29 @@ namespace EnergyStarZ
         
         private static volatile bool _isBatteryPowered = false;
         private static volatile bool _autoPowerModeEnabled = false;
+        private static volatile int _batteryLevelPercent = -1; // -1 = 未知
+
+        // 反馈升级参数
+        private const double EscalationCpuThreshold = 0.10;   // 节流后仍超过 10% 单核占用
+        private const double DeescalationCpuThreshold = 0.02; // 低于 2% 视为已收敛
+        private const int EscalationConsecutiveSamples = 3;
+        private const int DeescalationConsecutiveSamples = 5;
+
+        // 深度模式参数
+        private static int _deepModeIdleMinutes = 5;
+        private static int _lowBatteryEscalatePercent = 20;
+
+        public static int DeepModeIdleMinutes
+        {
+            get => _deepModeIdleMinutes;
+            set => _deepModeIdleMinutes = Math.Max(1, value);
+        }
+
+        public static int LowBatteryEscalatePercent
+        {
+            get => _lowBatteryEscalatePercent;
+            set => _lowBatteryEscalatePercent = Math.Clamp(value, 5, 95);
+        }
 
         private static volatile PowerMode _currentMode = PowerMode.Auto;
         public static PowerMode CurrentMode
@@ -183,6 +206,12 @@ namespace EnergyStarZ
 
                 // 使 EnableLogging 配置真正生效
                 AppLogger.Enabled = settings.EnableLogging;
+
+                ProcessContext.SetAudibleProcessList(settings.AudibleProcessList);
+                ProcessContext.EfficiencyCoreBindingEnabled = settings.EnableEfficiencyCoreBinding;
+                LowMemoryPriorityEnabled = settings.EnableLowMemoryPriority;
+                DeepModeIdleMinutes = settings.DeepModeIdleMinutes;
+                LowBatteryEscalatePercent = settings.LowBatteryEscalatePercent;
             }
             catch (Exception ex)
             {
@@ -253,6 +282,9 @@ namespace EnergyStarZ
 
                     // 定期清理过期的 LRU 条目（每分钟一次）
                     CleanupExpiredApps();
+
+                    // 反馈升级/回退：根据实测 CPU 占用调整档位
+                    EvaluateEscalation();
                 }
                 catch (Exception ex)
                 {
@@ -317,6 +349,17 @@ namespace EnergyStarZ
 
             var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
+
+            // 记录电量百分比（-1 表示未知，避免误判为低电量）
+            try
+            {
+                float life = SystemInformation.PowerStatus.BatteryLifePercent;
+                _batteryLevelPercent = life is > 0f and <= 1f ? (int)Math.Round(life * 100f) : -1;
+            }
+            catch
+            {
+                _batteryLevelPercent = -1;
+            }
 
             // 防抖：避免电池/AC 快速切换时频繁触发
             var timeSinceLastPowerSwitch = DateTime.UtcNow - _lastPowerModeSwitchTime;
@@ -563,13 +606,74 @@ namespace EnergyStarZ
                     enable ? pThrottleOn : pThrottleOff, (uint)szControlBlock);
 
                 // 无论 SetProcessInformation 成功与否，都尝试设置优先级作为补充
+                // PROCESS_MODE_BACKGROUND_BEGIN 会同时压低 IO 与内存调度优先级，
+                // 比单纯 IDLE_PRIORITY_CLASS 更省电（减少磁盘唤醒与工作集争抢）
                 Interop.Win32Api.SetPriorityClass(hProcess, enable
-                    ? Interop.Win32Api.PriorityClass.IDLE_PRIORITY_CLASS
-                    : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS);
+                    ? Interop.Win32Api.PriorityClass.IDLE_PRIORITY_CLASS | Interop.Win32Api.PriorityClass.PROCESS_MODE_BACKGROUND_BEGIN
+                    : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS | Interop.Win32Api.PriorityClass.PROCESS_MODE_BACKGROUND_END);
+
+                // 低内存优先级：让内存管理器更早回收该进程工作集，降低内存功耗
+                // （效果很强，但可能让内存密集型后台程序明显变慢，可在配置中关闭）
+                if (_lowMemoryPriorityEnabled)
+                {
+                    int memoryPriority = enable ? MemoryPriorityLow : MemoryPriorityNormal;
+                    IntPtr pMemoryPriority = Marshal.AllocHGlobal(sizeof(int));
+                    try
+                    {
+                        Marshal.WriteInt32(pMemoryPriority, memoryPriority);
+                        Interop.Win32Api.SetProcessInformation(hProcess, Interop.Win32Api.PROCESS_INFORMATION_CLASS.ProcessMemoryPriority,
+                            pMemoryPriority, (uint)sizeof(int));
+                    }
+                    finally
+                    {
+                        Marshal.FreeHGlobal(pMemoryPriority);
+                    }
+                }
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"Error applying efficiency mode to process: {ex.Message}");
+            }
+        }
+
+        // MEMORY_PRIORITY：1=VeryLow, 2=Low, 5=Normal
+        private const int MemoryPriorityLow = 2;
+        private const int MemoryPriorityNormal = 5;
+
+        private static volatile bool _lowMemoryPriorityEnabled = true;
+
+        public static bool LowMemoryPriorityEnabled
+        {
+            get => _lowMemoryPriorityEnabled;
+            set => _lowMemoryPriorityEnabled = value;
+        }
+
+        /// <summary>
+        /// 把进程绑定到能效核（或解除绑定）。仅在探测到混合架构 CPU 时生效
+        /// </summary>
+        private static void ToggleEfficiencyCoreBinding(IntPtr hProcess, bool enable)
+        {
+            if (!ProcessContext.IsHybridCpu)
+                return;
+
+            try
+            {
+                var cpuSets = ProcessContext.GetEfficiencyCoreCpuSets();
+                if (cpuSets == null || cpuSets.Length == 0)
+                    return;
+
+                bool ok = enable
+                    ? Interop.Win32Api.SetProcessDefaultCpuSets(hProcess, cpuSets, (uint)cpuSets.Length, IntPtr.Zero)
+                    : Interop.Win32Api.SetProcessDefaultCpuSets(hProcess, null, 0, IntPtr.Zero);
+
+                if (!ok)
+                {
+                    AppLogger.Warn($"SetProcessDefaultCpuSets({(enable ? "bind" : "clear")}) failed: {Marshal.GetLastWin32Error()}");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Efficiency core binding failed: {ex.Message}");
             }
         }
 
@@ -621,14 +725,14 @@ namespace EnergyStarZ
 
                     if (!ProcessCache.ContainsKey((int)pid))
                     {
-                        ProcessCache.TryAdd((int)pid, new ProcessInfo((int)pid, procName));
+                        ProcessCache.TryAdd((int)pid, new ProcessState((int)pid, procName));
                     }
                     else
                     {
                         var existing = ProcessCache[(int)pid];
                         if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
                         {
-                            ProcessCache[(int)pid] = new ProcessInfo((int)pid, procName);
+                            existing.Name = procName;
                         }
                     }
                 }
@@ -649,12 +753,93 @@ namespace EnergyStarZ
         }
 
         /// <summary>
-        /// 对指定进程列表应用效率模式，排除白名单和指定的前台/待处理进程
-        /// LRU 缓存中的应用会被优先恢复（不被节流）
+        /// 反馈升级：测量已被节流进程的 CPU 占用，仍然偏高的晋升到 Tier2，
+        /// 持续降低的回退到 Tier1。每轮刷新（约 30s）执行一次。
         /// </summary>
-        private static void ApplyEfficiencyMode(IEnumerable<ProcessInfo> processes, uint excludePid1, uint excludePid2 = 0)
+        private static void EvaluateEscalation()
         {
-            var processSnapshot = processes.ToList();
+            if (CurrentMode == PowerMode.Paused)
+                return;
+
+            var cpuSets = ProcessContext.GetEfficiencyCoreCpuSets();
+            bool canEscalate = cpuSets is { Length: > 0 };
+
+            foreach (var state in ProcessCache.Values)
+            {
+                if (state.Tier == ThrottleTier.None)
+                    continue;
+
+                var hProcess = Interop.Win32Api.OpenProcess(
+                    (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
+                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                    false,
+                    (uint)state.Id);
+
+                if (hProcess == IntPtr.Zero)
+                    continue;
+
+                try
+                {
+                    if (!Interop.Win32Api.QueryProcessCycleTime(hProcess, out var cycles))
+                        continue;
+
+                    var now = DateTime.UtcNow;
+                    var elapsed = now - state.LastMeasuredAt;
+
+                    if (state.LastCycles > 0 && elapsed > TimeSpan.FromSeconds(5))
+                    {
+                        double seconds = elapsed.TotalSeconds;
+                        double cyclesPerSecond = (cycles - state.LastCycles) / seconds;
+                        // 以 3GHz 为基准估算等效满核占用比例
+                        double coreFraction = cyclesPerSecond / 3_000_000_000.0;
+
+                        if (coreFraction > EscalationCpuThreshold)
+                        {
+                            state.ConsecutiveHighCpu++;
+                            state.ConsecutiveLowCpu = 0;
+                        }
+                        else if (coreFraction < DeescalationCpuThreshold)
+                        {
+                            state.ConsecutiveLowCpu++;
+                            state.ConsecutiveHighCpu = 0;
+                        }
+
+                        if (canEscalate && state.Tier == ThrottleTier.Tier1 &&
+                            state.ConsecutiveHighCpu >= EscalationConsecutiveSamples)
+                        {
+                            AppLogger.Info($"[ESCALATE] {state.Name} still using ~{coreFraction:P0} of a core, moving to efficiency cores");
+                            ToggleEfficiencyCoreBinding(hProcess, true);
+                            state.Tier = ThrottleTier.Tier2;
+                            state.ConsecutiveHighCpu = 0;
+                        }
+                        else if (state.Tier == ThrottleTier.Tier2 &&
+                                 state.ConsecutiveLowCpu >= DeescalationConsecutiveSamples)
+                        {
+                            AppLogger.Info($"[DEESCALATE] {state.Name} down to ~{coreFraction:P0} of a core, releasing efficiency cores");
+                            ToggleEfficiencyCoreBinding(hProcess, false);
+                            state.Tier = ThrottleTier.Tier1;
+                            state.ConsecutiveLowCpu = 0;
+                        }
+                    }
+
+                    state.LastCycles = cycles;
+                    state.LastMeasuredAt = now;
+                }
+                finally
+                {
+                    Interop.Win32Api.CloseHandle(hProcess);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 分层节流策略：为每个进程决定目标档位并应用差异更新。
+        /// 保护顺序：系统/用户白名单 &gt; 播音中 &gt; 前台/待处理 &gt; LRU 最近使用
+        /// &gt; 可见窗口（深度模式下豁免失效）
+        /// </summary>
+        private static void ApplyThrottlePolicy(uint excludePid1, uint excludePid2 = 0)
+        {
+            var processSnapshot = ProcessCache.Values.ToList();
 
             // 一次性快照保护列表：避免逐个加锁，也避免重载配置时的竞态
             HashSet<string> bypassSnapshot;
@@ -663,44 +848,144 @@ namespace EnergyStarZ
                 bypassSnapshot = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
             }
 
-            foreach (var procInfo in processSnapshot)
+            bool deepMode = IsDeepModeActive();
+            HashSet<int> visiblePids = deepMode ? new HashSet<int>() : ProcessContext.GetVisibleProcessIds();
+            bool fullscreen = !deepMode && ProcessContext.IsFullscreenOrPresentation();
+            uint idleMs = ProcessContext.GetIdleTimeMs();
+
+            foreach (var state in processSnapshot)
             {
-                if (procInfo.Id == excludePid1 || procInfo.Id == excludePid2)
-                    continue;
+                uint pid = (uint)state.Id;
 
-                // 检查保护列表（系统进程）
-                if (bypassSnapshot.Contains(procInfo.Name))
-                    continue;
-
-                // 检查 LRU 缓存（最近使用的应用优先恢复）
-                if (IsAppInRecentList((uint)procInfo.Id))
+                if (pid == excludePid1 || pid == excludePid2)
                 {
-                    // LRU 中的应用：恢复或保持不节流
+                    ApplyTier(state, ThrottleTier.None);
                     continue;
                 }
 
-                var hProcess = Interop.Win32Api.OpenProcess(
-                    (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                           Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
-                    false,
-                    (uint)procInfo.Id);
-
-                if (hProcess != IntPtr.Zero)
+                // 保护列表（系统进程 + 用户配置）
+                if (bypassSnapshot.Contains(state.Name))
                 {
-                    try
-                    {
-                        ToggleEfficiencyMode(hProcess, true);
-                    }
-                    catch (Exception ex)
-                    {
-                        AppLogger.Error($"ApplyEfficiencyMode failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
-                    }
-                    finally
-                    {
-                        Interop.Win32Api.CloseHandle(hProcess);
-                    }
+                    ApplyTier(state, ThrottleTier.None);
+                    continue;
+                }
+
+                // 可能正在播音的进程
+                if (ProcessContext.IsLikelyAudible(state.Name))
+                {
+                    ApplyTier(state, ThrottleTier.None);
+                    continue;
+                }
+
+                // LRU 中最近使用过的应用保持不节流
+                if (IsAppInRecentList(pid))
+                {
+                    ApplyTier(state, ThrottleTier.None);
+                    continue;
+                }
+
+                // 有可见窗口的进程不节流（深度模式下豁免失效）
+                if (visiblePids.Contains(state.Id))
+                {
+                    ApplyTier(state, ThrottleTier.None);
+                    continue;
+                }
+
+                // 深度模式（熄屏 / 长时间空闲 / 低电量）：直接上 Tier2
+                var target = deepMode ? ThrottleTier.Tier2 : ThrottleTier.Tier1;
+
+                // 低电量时同样提升一档
+                if (!deepMode && _batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
+                {
+                    target = ThrottleTier.Tier2;
+                }
+
+                ApplyTier(state, target);
+
+                if (AppLogger.Enabled && fullscreen && state.Tier != ThrottleTier.None)
+                {
+                    // 全屏/演示模式下仍会节流后台进程，但这里不做额外处理，
+                    // 仅用于日志可观测性
                 }
             }
+
+            if (AppLogger.Enabled && deepMode)
+            {
+                AppLogger.Info($"[DEEP] Deep throttling active (screen={(ProcessContext.IsScreenOn ? "on" : "off")}, idle={idleMs / 1000}s, battery={_batteryLevelPercent}%).");
+            }
+        }
+
+        /// <summary>
+        /// 把进程调整到目标档位（幂等，档位未变化时不会重复调用 API）
+        /// </summary>
+        private static void ApplyTier(ProcessState state, ThrottleTier target)
+        {
+            if (state.Tier == target)
+                return;
+
+            var hProcess = Interop.Win32Api.OpenProcess(
+                (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
+                       Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
+                false,
+                (uint)state.Id);
+
+            if (hProcess == IntPtr.Zero)
+                return;
+
+            try
+            {
+                if (target == ThrottleTier.None)
+                {
+                    ToggleEfficiencyMode(hProcess, false);
+                    ToggleEfficiencyCoreBinding(hProcess, false);
+                    AppLogger.Info($"[RESTORE] {state.Name} (PID: {state.Id})");
+                }
+                else
+                {
+                    ToggleEfficiencyMode(hProcess, true);
+                    if (target == ThrottleTier.Tier2)
+                    {
+                        ToggleEfficiencyCoreBinding(hProcess, true);
+                    }
+                    else
+                    {
+                        ToggleEfficiencyCoreBinding(hProcess, false);
+                    }
+
+                    AppLogger.Info($"[THROTTLE:{target}] {state.Name} (PID: {state.Id})");
+                }
+
+                state.Tier = target;
+                state.LastCycles = 0;
+                state.LastMeasuredAt = DateTime.UtcNow;
+                state.ConsecutiveHighCpu = 0;
+                state.ConsecutiveLowCpu = 0;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"ApplyTier failed for {state.Name} (PID: {state.Id}): {ex.Message}");
+            }
+            finally
+            {
+                Interop.Win32Api.CloseHandle(hProcess);
+            }
+        }
+
+        /// <summary>
+        /// 深度模式：熄屏、用户长时间空闲或低电量时启用更激进的节流
+        /// </summary>
+        private static bool IsDeepModeActive()
+        {
+            if (!ProcessContext.IsScreenOn)
+                return true;
+
+            if (ProcessContext.GetIdleTimeMs() > DeepModeIdleMinutes * 60_000)
+                return true;
+
+            if (_batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
+                return true;
+
+            return false;
         }
 
         public static void ThrottleAllUserBackgroundProcesses()
@@ -714,7 +999,7 @@ namespace EnergyStarZ
                 currentPendingPid = _pendingProcPid;
             }
 
-            ApplyEfficiencyMode(ProcessCache.Values, currentPendingPid);
+            ApplyThrottlePolicy(currentPendingPid);
         }
 
         public static async Task RestoreAllProcessesToNormalAsync()
@@ -723,29 +1008,9 @@ namespace EnergyStarZ
 
             await Task.Run(() =>
             {
-                foreach (var procInfo in processSnapshot)
+                foreach (var state in processSnapshot)
                 {
-                    var hProcess = Interop.Win32Api.OpenProcess(
-                        (uint)(Interop.Win32Api.ProcessAccessFlags.SetInformation |
-                               Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation),
-                        false,
-                        (uint)procInfo.Id);
-
-                    if (hProcess != IntPtr.Zero)
-                    {
-                        try
-                        {
-                            ToggleEfficiencyMode(hProcess, false);
-                        }
-                        catch (Exception ex)
-                        {
-                            AppLogger.Error($"RestoreAllProcessesToNormal failed for {procInfo.Name} (PID: {procInfo.Id}): {ex.Message}");
-                        }
-                        finally
-                        {
-                            Interop.Win32Api.CloseHandle(hProcess);
-                        }
-                    }
+                    ApplyTier(state, ThrottleTier.None);
                 }
             });
         }
@@ -905,7 +1170,7 @@ namespace EnergyStarZ
 
                 // 对其他后台进程应用效率限制
                 // 优先恢复 LRU 缓存中的应用
-                ApplyEfficiencyMode(ProcessCache.Values, actualProcId, prevPid);
+                ApplyThrottlePolicy(actualProcId, prevPid);
 
                 _lastSwitchTime = currentTime;
                 lock (_pendingProcLock)
@@ -923,6 +1188,34 @@ namespace EnergyStarZ
 
         private readonly record struct UwpChildProcessInfo(uint Pid, IntPtr Handle, string Name);
 
-        private readonly record struct ProcessInfo(int Id, string Name);
+        /// <summary>
+        /// 节流档位：None=不节流，Tier1=EcoQoS+后台模式+低内存优先级，Tier2=额外绑定能效核
+        /// </summary>
+        public enum ThrottleTier
+        {
+            None = 0,
+            Tier1 = 1,
+            Tier2 = 2,
+        }
+
+        /// <summary>
+        /// 进程的运行时节流状态（含反馈升级所需的 CPU 测量值）
+        /// </summary>
+        public sealed class ProcessState
+        {
+            public ProcessState(int id, string name)
+            {
+                Id = id;
+                Name = name;
+            }
+
+            public int Id { get; }
+            public string Name { get; set; }
+            public ThrottleTier Tier { get; set; } = ThrottleTier.None;
+            public ulong LastCycles { get; set; }
+            public DateTime LastMeasuredAt { get; set; } = DateTime.UtcNow;
+            public int ConsecutiveHighCpu { get; set; }
+            public int ConsecutiveLowCpu { get; set; }
+        }
     }
 }
