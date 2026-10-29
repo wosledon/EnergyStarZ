@@ -1,107 +1,209 @@
 # EnergyStarZ
 
-[中文文档](README_zh.md) | [English Documentation](README.md)
+**[中文文档](README_zh.md)** | English Documentation | **[项目主页](https://wosledon.github.io/EnergyStarZ/)**
 
-EnergyStarZ is a high-performance energy efficiency manager for Windows that automatically optimizes power consumption by adjusting process priorities and throttling background applications. It helps extend battery life on laptops while maintaining optimal performance for foreground applications.
+![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Windows%2011%2024H2+-0078D6)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Build](https://github.com/wosledon/EnergyStarZ/actions/workflows/build-release.yml/badge.svg)
 
-## Features
+**Windows 能效管理器：自动节流后台进程 —— 笔记本更省电，前台更流畅。**
 
-- **Automatic Power Management**: Automatically detects foreground applications and applies efficiency settings to background processes
-- **Three Operation Modes**:
-  - Auto Mode: Automatically adjusts based on foreground applications
-  - Manual Mode: Stops reacting to foreground switches; background processes are still throttled periodically
-  - Paused Mode: Disables all power management
-- **System Tray Interface**: Convenient access through system tray icon
-- **Hotkey Support**: Quick mode switching with keyboard shortcuts
-- **Multilingual Support**: Available in English and Chinese
-- **Configurable Settings**: Customizable via appsettings.json
-- **Low Resource Usage**: Minimal CPU and memory footprint
+EnergyStarZ watches which app you are actually using and makes everything else get out of the way — CPU, disk and memory. On a laptop that means longer battery life; on a desktop or on AC power it means a smoother, more responsive foreground app.
 
-## Installation
+---
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/wosledon/EnergyStarZ.git
-   ```
+## ✨ Features
 
-2. Navigate to the source directory:
-   ```bash
-   cd EnergyStarZ/src/EnergyStarZ
-   ```
+| | |
+|---|---|
+| **🎯 前台感知** | Listens for foreground window switches. The app you just switched to is boosted instantly; the one you left is throttled. |
+| **▤ 分层节流** | Not a single on/off switch — EcoQoS + idle priority + background I/O + low memory priority, escalating to efficiency cores when needed. |
+| **⛨ 安全优先** | System processes, your whitelist, apps with visible windows, media playback, fullscreen video and recent apps are never throttled. |
+| **▣ 托盘与热键** | Lives in the system tray. Switch modes with `Ctrl+Alt+A / P / R`, or use the menu. English and Chinese included. |
+| **↺ 即时还原** | Switch to an app and every restriction is removed immediately. Pause or fully disable at any time — everything is restored. |
+| **◔ 极小占用** | A single Toolhelp32 snapshot for process enumeration, batched log writes, and a dedicated writer thread. A few MB of RAM. |
 
-3. Build the project:
-   ```bash
-   dotnet build
-   ```
+---
 
-4. Run the application:
-   ```bash
-   dotnet run
-   ```
+## 📥 Installation
 
-## Usage
+### Download a release (recommended)
 
-### System Tray Menu
-Right-click the system tray icon to access the menu:
-- **Auto Mode/Manual Mode/Paused Mode**: Switch between operation modes
-- **Auto Power Mode**: Automatically use the aggressive profile on battery
-- **Energy Management**: Completely disable or re-enable energy management
-- **Edit Configuration**: Open appsettings.json for editing
-- **Reload Configuration**: Reload settings without restarting
-- **Exit**: Close the application
+Grab the latest build from the [Releases](https://github.com/wosledon/EnergyStarZ/releases/latest) page:
+
+| File | When to use |
+|---|---|
+| `EnergyStarZ-x64-SelfContained-1.1.0.zip` | **Recommended** — bundles the .NET runtime, no prerequisites |
+| `EnergyStarZ-x86-SelfContained-1.1.0.zip` | 32-bit systems |
+| `EnergyStarZ-x64-FrameworkDependent-1.1.0.zip` | You already have the .NET 10 desktop runtime — much smaller |
+| `EnergyStarZ-x86-FrameworkDependent-1.1.0.zip` | 32-bit + runtime already installed |
+
+Unzip anywhere and run `EnergyStarZ.exe` — it appears in the system tray.
+
+### Build from source
+
+```bash
+git clone https://github.com/wosledon/EnergyStarZ.git
+cd EnergyStarZ/src/EnergyStarZ
+dotnet run
+```
+
+---
+
+## 🎮 Usage
+
+### System tray menu
+
+Right-click the tray icon:
+
+| Menu item | What it does |
+|---|---|
+| **Auto / Manual / Paused** | Switch operation mode (see below) |
+| **Auto Power Mode** | Use the aggressive profile automatically on battery |
+| **Energy Management** | Completely disable or re-enable energy management |
+| **Edit Configuration** | Open `appsettings.json` |
+| **Reload Configuration** | Apply config changes without restarting |
+| **Exit** | Close the application |
+
+### Operation modes
+
+| Mode | Behaviour |
+|---|---|
+| **Auto** | Reacts to foreground switches and throttles background processes continuously |
+| **Manual** | Stops reacting to foreground switches; background processes are still throttled periodically |
+| **Paused** | No throttling at all — the app stays warm so resuming is instant |
 
 ### Hotkeys
-- `Ctrl+Alt+A`: Toggle between operation modes
-- `Ctrl+Alt+P`: Switch to Paused mode
-- `Ctrl+Alt+R`: Switch to Auto mode
 
-### Configuration
-Edit `appsettings.json` to customize:
-- `ScanIntervalMinutes`: Interval for background process scanning (default: 10)
-- `SwitchDebounceMs`: Minimum interval between foreground switches before throttling the previous app (default: 500)
-- `EnableLogging`: Enable/disable logging (default: true)
-- `Enabled`: Master switch. `false` makes the app fully dormant: no hooks, no background work, no throttling, and any throttling left over from a previous run is restored on startup (default: true)
-- `InitialMode`: Startup mode (Auto, Manual, or Paused)
-- `BypassProcessList`: List of processes to exclude from power management
-- `EnableAutoPowerMode`: Automatically switch to aggressive throttling on battery (default: false)
-- `PauseOnAcPower`: When auto power mode is on, fully pause management on AC power (default: false)
-- `LRUCacheSize`: Number of recently used apps kept unthrottled (default: 5)
-- `LRUDecayMinutes`: Idle time before an LRU entry expires (default: 5)
-- `LRUMinSize` / `LRUMaxSize`: Bounds for automatic LRU size adjustment (default: 3 / 15)
-- `AudibleProcessList`: Processes treated as "possibly playing audio" and never throttled (heuristic)
-- `EnableEfficiencyCoreBinding`: Pin throttled processes to efficiency cores on hybrid CPUs (auto-disabled when undetectable, default: true)
-- `EnableLowMemoryPriority`: Apply low memory priority to throttled processes (very effective, may slow memory-heavy background apps, default: true)
-- `LowMemoryPriorityOnAcPower`: Also apply low memory priority on AC power (default: false, AC favors background task speed)
-- `DeepModeIdleMinutes`: Idle time before entering deep throttling mode (default: 5)
-- `LowBatteryEscalatePercent`: Battery level below which throttling is escalated (default: 20)
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Alt+A` | Cycle Auto → Manual → Paused |
+| `Ctrl+Alt+P` | Switch to Paused |
+| `Ctrl+Alt+R` | Switch to Auto |
 
-## How It Works
+---
 
-EnergyStarZ monitors foreground application switches and applies power throttling to background processes. When a process becomes the foreground application, it receives higher priority and performance. Background processes are throttled to conserve energy.
+## ⚙️ Configuration
 
-The application uses Windows' PROCESS_POWER_THROTTLING API to control process execution speed and adjusts process priorities to optimize energy consumption.
+Edit `appsettings.json` next to the executable, then use **Reload Configuration** in the tray menu.
+
+### Basics
+
+| Key | Default | Description |
+|---|---|---|
+| `Enabled` | `true` | Master switch. `false` makes the app fully dormant: no hooks, no background work, no throttling — and any throttling left over from a previous run is restored on startup |
+| `InitialMode` | `"Auto"` | Startup mode: `Auto`, `Manual` or `Paused` |
+| `ScanIntervalMinutes` | `10` | Interval for the background process sweep |
+| `SwitchDebounceMs` | `500` | Minimum gap between foreground switches before the previous app is throttled |
+| `EnableLogging` | `true` | Write `energy.log` next to the executable (rotates at 1 MB) |
+
+### What is protected
+
+| Key | Default | Description |
+|---|---|---|
+| `BypassProcessList` | see file | Processes excluded from power management, matched case-insensitively |
+| `AudibleProcessList` | see file | Processes treated as "possibly playing audio" and never throttled (heuristic) |
+
+### Recently used apps (LRU)
+
+Apps you switch between often are kept unthrottled so switching back is instant. The cache size adapts to how often you switch.
+
+| Key | Default | Description |
+|---|---|---|
+| `LRUCacheSize` | `5` | Number of recently used apps kept unthrottled |
+| `LRUDecayMinutes` | `5` | Idle time before an LRU entry expires |
+| `LRUMinSize` / `LRUMaxSize` | `3` / `15` | Bounds for automatic LRU size adjustment |
+
+### Throttling strength
+
+| Key | Default | Description |
+|---|---|---|
+| `EnableLowMemoryPriority` | `true` | Apply low memory priority to throttled processes. Very effective, but can noticeably slow memory-heavy background apps |
+| `LowMemoryPriorityOnAcPower` | `false` | Also apply it on AC power — off by default so background tasks keep their speed |
+| `EnableEfficiencyCoreBinding` | `true` | Pin throttled processes to efficiency cores on hybrid CPUs. Auto-disabled (with a log entry) when the CPU cannot be enumerated or is not hybrid |
+
+### Deep mode
+
+Deep mode escalates throttling when you are clearly not using the machine.
+
+| Key | Default | Description |
+|---|---|---|
+| `DeepModeIdleMinutes` | `5` | Idle time (no keyboard/mouse) before deep mode kicks in |
+| `LowBatteryEscalatePercent` | `20` | Battery level below which throttling is escalated (battery only) |
+
+### Power source
+
+| Key | Default | Description |
+|---|---|---|
+| `EnableAutoPowerMode` | `false` | Automatically use the aggressive profile on battery |
+| `PauseOnAcPower` | `false` | When auto power mode is on, fully pause management on AC power. `false` keeps throttling on AC for responsiveness |
+
+---
+
+## 🔧 How it works
+
+EnergyStarZ monitors foreground application switches and applies power throttling to background processes. When a process becomes the foreground application it receives higher priority and performance; background processes are throttled to conserve energy. It uses Windows' `PROCESS_POWER_THROTTLING` API to control execution speed and adjusts process priorities to optimize energy consumption.
 
 ### Tiered throttling policy
 
 Throttling is layered instead of a single on/off switch. Each background process is placed in a tier, and only the difference is applied when the tier changes:
 
-- **Protected (never throttled)**: hardcoded system processes, `BypassProcessList`, the foreground/pending app, LRU recently-used apps, processes with a visible top-level window, processes in `AudibleProcessList`, and anything in fullscreen/presentation mode.
-- **Tier 1** (default background): EcoQoS execution-speed throttle + `IDLE_PRIORITY_CLASS | PROCESS_MODE_BACKGROUND_BEGIN` (which also lowers I/O and memory scheduling) + low memory priority.
-- **Tier 2** (escalated): Tier 1 plus binding to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, battery is low, or the process still burns CPU after feedback measurement (`QueryProcessCycleTime`).
-- **Restore**: all controls are cleared (EcoQoS off, normal priority, background mode end, CPU sets released).
+| Tier | What is applied |
+|---|---|
+| **Protected** — never throttled | Hardcoded system processes · `BypassProcessList` · the foreground/pending app · LRU recently-used apps · processes with a visible top-level window · `AudibleProcessList` · fullscreen/presentation mode |
+| **Tier 1** — default background | EcoQoS execution-speed throttle + `IDLE_PRIORITY_CLASS` \| `PROCESS_MODE_BACKGROUND_BEGIN` (which also lowers I/O and memory scheduling) + low memory priority |
+| **Tier 2** — escalated | Tier 1 plus binding to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, battery is low, or the process still burns CPU after feedback measurement (`QueryProcessCycleTime`) |
+| **Restore** | All controls are cleared: EcoQoS off, normal priority, background mode end, CPU sets released |
 
-Measured under CPU contention on a 16-core machine, Tier 1 reduced a busy background process to ~28% of its cycles, and adding low memory priority brought it to ~4%, with full restoration afterwards.
+### Measured, not promised
 
-### Desktop and AC power
+Under CPU contention on a 16-core machine (24 saturated background processes, measured with `QueryProcessCycleTime`):
 
-Throttling is not only about battery life. On AC power (or a desktop) the benefit shifts to **responsiveness**: background processes yield CPU, I/O and memory instantly when the foreground app needs them, so frame pacing and app switching stay smooth. Measured with 16 saturated background processes and a 60fps foreground loop, Tier 1 cut wake-up latency p99 from 29.2ms to 16.2ms (-44%) and max from 31.3ms to 16.3ms (-48%), while background processes still consumed 95.6% of their previous CPU time — they finish their work, they just get out of the way.
+| Configuration | Background CPU |
+|---|---|
+| Baseline | 100% |
+| EcoQoS only | ~92% |
+| + idle priority & background mode | **28%** |
+| + low memory priority | **3.7%** |
+| Restored | 100% |
 
-For this reason the default behaviour on AC power is to **keep throttling** (balanced profile: no low memory priority, no low-battery escalation). Set `PauseOnAcPower` to `true` if you prefer management to stop completely on AC.
+Foreground responsiveness (16 saturated background processes, 60fps foreground loop):
+
+| Wake-up latency | Before | After |
+|---|---|---|
+| p50 | 16.7 ms | 15.1 ms |
+| p99 | 29.2 ms | **16.2 ms** |
+| max | 31.3 ms | **16.3 ms** |
+
+A 16 ms p99 means a steady 60fps; 29 ms means roughly one dropped frame in eight. Meanwhile the background processes still consumed 95.6% of their previous CPU — they finish their work, they just get out of the way.
+
+---
+
+## ❓ FAQ
+
+**Does it help on a desktop, or a laptop plugged into power?**
+Yes — the benefit shifts from battery life to responsiveness. Background processes yield CPU, disk and memory the moment your foreground app needs them, so frame pacing and app switching stay smooth. On hybrid Intel desktops, efficiency-core binding also keeps the P-cores free for your game.
+
+**Will it slow down my downloads, builds or antivirus?**
+They run in background mode, so they finish slower while the system is busy — that is the trade-off that keeps your foreground app smooth. Anything with a visible window, anything you used recently, and anything in your whitelist is exempt. On AC power the most aggressive lever (low memory priority) is off by default.
+
+**How do I turn it off completely?**
+Untick **Energy Management** in the tray menu (instant, restores everything), or set `"Enabled": false` in `appsettings.json` (the app starts fully dormant and also cleans up anything left over from a previous run). **Paused** mode is the lighter option — no throttling, but the app stays warm for an instant resume.
+
+**Is it safe? What about music or a video call?**
+Critical system processes are hardcoded as protected. Processes with a visible window are never throttled, and common media/communication apps are exempt by default (configurable via `AudibleProcessList`). Fullscreen video and presentation mode are detected and respected.
+
+**Why does it require Windows 11 24H2?**
+The efficiency-mode and power-throttling APIs it relies on only behave correctly from build 26100 onwards. On older builds the app shows a message and exits instead of misbehaving.
+
+---
 
 ## Requirements
 
-- Windows 11 24H2 or later
-- .NET 10.0 Runtime
+- Windows 11 24H2 (build 26100) or later
+- .NET 10.0 runtime (only for the framework-dependent builds)
 
 ## Acknowledgments
 
@@ -109,4 +211,4 @@ This project is based on the original EnergyStar project by [imbushuo](https://g
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.

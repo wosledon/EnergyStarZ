@@ -103,15 +103,34 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      # 发版说明 = 标签备注（本次亮点，打标签时写） + 固定尾部模板 + 自动变更日志
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}' -replace '^v',''
+          $footer = (Get-Content -Raw -Encoding utf8 '.github/release-template.md') -replace '\{VERSION\}', $version
+          $highlights = (git tag -l --format='%(contents)' '${{ github.ref_name }}' | Out-String).Trim()
+          if ($highlights) {
+            "$highlights`n`n---`n`n$footer" | Out-File -FilePath release-notes.md -Encoding utf8
+          } else {
+            $footer | Out-File -FilePath release-notes.md -Encoding utf8
+          }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*.zip
+          body_path: release-notes.md
           draft: false
           prerelease: false
           generate_release_notes: true
