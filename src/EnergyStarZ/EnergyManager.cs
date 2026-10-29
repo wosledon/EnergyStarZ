@@ -113,6 +113,24 @@ namespace EnergyStarZ
         private static int _deepModeIdleMinutes = 5;
         private static int _lowBatteryEscalatePercent = 20;
 
+        // 工作集裁剪参数
+        private static volatile bool _workingSetTrimEnabled = true;
+        private static int _workingSetTrimMinMB = 64;
+        private const double WorkingSetTrimIdleThreshold = 0.02; // 低于 2% 单核占用视为空闲
+        private const int WorkingSetTrimIdleSamples = 2;         // 连续 2 次（约 1 分钟）才裁剪
+
+        public static bool WorkingSetTrimEnabled
+        {
+            get => _workingSetTrimEnabled;
+            set => _workingSetTrimEnabled = value;
+        }
+
+        public static int WorkingSetTrimMinMB
+        {
+            get => _workingSetTrimMinMB;
+            set => _workingSetTrimMinMB = Math.Clamp(value, 8, 4096);
+        }
+
         public static int DeepModeIdleMinutes
         {
             get => _deepModeIdleMinutes;
@@ -261,6 +279,8 @@ namespace EnergyStarZ
                 LowMemoryPriorityEnabled = settings.EnableLowMemoryPriority;
                 LowMemoryPriorityOnAcPower = settings.LowMemoryPriorityOnAcPower;
                 PauseOnAcPower = settings.PauseOnAcPower;
+                WorkingSetTrimEnabled = settings.EnableWorkingSetTrim;
+                WorkingSetTrimMinMB = settings.WorkingSetTrimMinMB;
                 _enabled = settings.Enabled;
                 DeepModeIdleMinutes = settings.DeepModeIdleMinutes;
                 LowBatteryEscalatePercent = settings.LowBatteryEscalatePercent;
@@ -857,6 +877,68 @@ namespace EnergyStarZ
         }
 
         /// <summary>
+        /// 对实测空闲的后台进程裁剪工作集（EmptyWorkingSet）。
+        /// 实测：一个空转但占 514MB 常驻内存的进程可被 100% 释放，且不会回流。
+        /// 需要单独的句柄权限（PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA），
+        /// 打不开就静默跳过，不影响节流本身。
+        /// </summary>
+        private static void TrimWorkingSetIfIdle(ProcessState state, double coreFraction)
+        {
+            if (!_workingSetTrimEnabled || state.Tier == ThrottleTier.None)
+                return;
+
+            if (coreFraction < WorkingSetTrimIdleThreshold)
+            {
+                state.ConsecutiveIdleSamples++;
+            }
+            else
+            {
+                // 重新活跃后允许下次空闲时再次裁剪
+                state.ConsecutiveIdleSamples = 0;
+                state.WorkingSetTrimmed = false;
+                return;
+            }
+
+            if (state.WorkingSetTrimmed || state.ConsecutiveIdleSamples < WorkingSetTrimIdleSamples)
+                return;
+
+            var hQuota = Interop.Win32Api.OpenProcess(
+                (uint)(Interop.Win32Api.ProcessAccessFlags.QueryInformation |
+                       Interop.Win32Api.ProcessAccessFlags.SetQuota),
+                false,
+                (uint)state.Id);
+
+            if (hQuota == IntPtr.Zero)
+                return;
+
+            try
+            {
+                uint size = (uint)Marshal.SizeOf<Interop.Win32Api.PROCESS_MEMORY_COUNTERS_EX>();
+                if (!Interop.Win32Api.GetProcessMemoryInfo(hQuota, out var mem, size))
+                    return;
+
+                ulong minBytes = (ulong)_workingSetTrimMinMB * 1024 * 1024;
+                if ((ulong)mem.WorkingSetSize < minBytes)
+                    return;
+
+                if (Interop.Win32Api.EmptyWorkingSet(hQuota))
+                {
+                    state.WorkingSetTrimmed = true;
+                    AppLogger.Info(
+                        $"[TRIM] {state.Name} (PID: {state.Id}) working set {(ulong)mem.WorkingSetSize / 1024 / 1024} MB released (idle at ~{coreFraction:P1} of a core)");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"TrimWorkingSet failed for {state.Name}: {ex.Message}");
+            }
+            finally
+            {
+                Interop.Win32Api.CloseHandle(hQuota);
+            }
+        }
+
+        /// <summary>
         /// 反馈升级：测量已被节流进程的 CPU 占用，仍然偏高的晋升到 Tier2，
         /// 持续降低的回退到 Tier1。每轮刷新（约 30s）执行一次。
         /// </summary>
@@ -889,13 +971,16 @@ namespace EnergyStarZ
 
                     var now = DateTime.UtcNow;
                     var elapsed = now - state.LastMeasuredAt;
+                    double coreFraction = 0;
+                    bool hasMeasurement = false;
 
                     if (state.LastCycles > 0 && elapsed > TimeSpan.FromSeconds(5))
                     {
                         double seconds = elapsed.TotalSeconds;
                         double cyclesPerSecond = (cycles - state.LastCycles) / seconds;
                         // 以 3GHz 为基准估算等效满核占用比例
-                        double coreFraction = cyclesPerSecond / 3_000_000_000.0;
+                        coreFraction = cyclesPerSecond / 3_000_000_000.0;
+                        hasMeasurement = true;
 
                         if (coreFraction > EscalationCpuThreshold)
                         {
@@ -928,6 +1013,14 @@ namespace EnergyStarZ
 
                     state.LastCycles = cycles;
                     state.LastMeasuredAt = now;
+
+                    // 工作集裁剪：实测空闲的后台进程，把常驻内存立即还给系统。
+                    // 只处理已被节流的进程，且必须连续多次测得空闲，
+                    // 否则反复换入换出反而增加磁盘活动、更耗电
+                    if (hasMeasurement)
+                    {
+                        TrimWorkingSetIfIdle(state, coreFraction);
+                    }
                 }
                 finally
                 {
@@ -1325,6 +1418,8 @@ namespace EnergyStarZ
             public string Name { get; set; }
             public ThrottleTier Tier { get; set; } = ThrottleTier.None;
             public bool MemoryPriorityApplied { get; set; }
+            public bool WorkingSetTrimmed { get; set; }
+            public int ConsecutiveIdleSamples { get; set; }
             public ulong LastCycles { get; set; }
             public DateTime LastMeasuredAt { get; set; } = DateTime.UtcNow;
             public int ConsecutiveHighCpu { get; set; }

@@ -105,7 +105,6 @@ namespace EnergyStarZ.Interop
             PROCESS_MODE_BACKGROUND_END = 0x200000,//   'Windows Vista/2008 and higher
             REALTIME_PRIORITY_CLASS = 0x100
         }
-
         [StructLayout(LayoutKind.Sequential)]
         public struct PROCESS_POWER_THROTTLING_STATE
         {
@@ -175,6 +174,29 @@ namespace EnergyStarZ.Interop
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool QueryProcessCycleTime(IntPtr hProcess, out ulong CycleTime);
+
+        // 工作集裁剪：把空闲后台进程的常驻内存立即释放回系统
+        [DllImport("psapi.dll", SetLastError = true)]
+        public static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        public static extern bool GetProcessMemoryInfo(IntPtr hProcess, out PROCESS_MEMORY_COUNTERS_EX ppsmemCounters, uint cb);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct PROCESS_MEMORY_COUNTERS_EX
+        {
+            public uint cb;
+            public uint PageFaultCount;
+            public UIntPtr PeakWorkingSetSize;
+            public UIntPtr WorkingSetSize;
+            public UIntPtr QuotaPeakPagedPoolUsage;
+            public UIntPtr QuotaPagedPoolUsage;
+            public UIntPtr QuotaPeakNonPagedPoolUsage;
+            public UIntPtr QuotaNonPagedPoolUsage;
+            public UIntPtr PagefileUsage;
+            public UIntPtr PeakPagefileUsage;
+            public UIntPtr PrivateUsage;
+        }
 
         [StructLayout(LayoutKind.Sequential)]
         public struct SYSTEM_CPU_SET_INFORMATION

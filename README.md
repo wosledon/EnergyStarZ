@@ -122,6 +122,8 @@ Apps you switch between often are kept unthrottled so switching back is instant.
 |---|---|---|
 | `EnableLowMemoryPriority` | `true` | Apply low memory priority to throttled processes. Very effective, but can noticeably slow memory-heavy background apps |
 | `LowMemoryPriorityOnAcPower` | `false` | Also apply it on AC power — off by default so background tasks keep their speed |
+| `EnableWorkingSetTrim` | `true` | Release the resident memory of throttled processes that measure as idle (see below) |
+| `WorkingSetTrimMinMB` | `64` | Only trim processes whose working set exceeds this, so small apps are not disturbed for little gain |
 | `EnableEfficiencyCoreBinding` | `true` | Pin throttled processes to efficiency cores on hybrid CPUs. Auto-disabled (with a log entry) when the CPU cannot be enumerated or is not hybrid |
 
 ### Deep mode
@@ -178,6 +180,12 @@ Foreground responsiveness (16 saturated background processes, 60fps foreground l
 | max | 31.3 ms | **16.3 ms** |
 
 A 16 ms p99 means a steady 60fps; 29 ms means roughly one dropped frame in eight. Meanwhile the background processes still consumed 95.6% of their previous CPU — they finish their work, they just get out of the way.
+
+### Memory
+
+Low memory priority makes the memory manager reclaim a throttled process's pages earlier. On top of that, a throttled process that measures as idle (below 2% of a core for two consecutive samples, roughly a minute) has its working set released immediately with `EmptyWorkingSet`.
+
+Measured on a process idling with 514 MB resident: the working set dropped to **0 MB** and stayed there — the pages only come back if the process actually touches them again. This frees RAM for your foreground app and reduces memory-compression and page-fault work. It only ever applies to processes that are already throttled, so anything you are using is untouched.
 
 ---
 

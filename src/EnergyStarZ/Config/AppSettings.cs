@@ -69,6 +69,16 @@ namespace EnergyStarZ.Config
         /// 电量低于该百分比时提升一档节流强度
         /// </summary>
         public int LowBatteryEscalatePercent { get; set; } = 20;
+
+        /// <summary>
+        /// 裁剪空闲后台进程的工作集（把常驻内存还给系统）
+        /// </summary>
+        public bool EnableWorkingSetTrim { get; set; } = true;
+
+        /// <summary>
+        /// 只裁剪工作集大于该值的进程（MB），避免为省少量内存付出换入代价
+        /// </summary>
+        public int WorkingSetTrimMinMB { get; set; } = 64;
         
         public int LRUCacheSize 
         { 
