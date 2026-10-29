@@ -14,10 +14,11 @@ namespace EnergyStarZ
         {
             AppLogger.Info("House keeping thread started.");
 
+            var interval = TimeSpan.FromMinutes(Math.Max(1, settings.ScanIntervalMinutes));
+            using var houseKeepingTimer = new PeriodicTimer(interval);
+
             try
             {
-                using var houseKeepingTimer = new PeriodicTimer(TimeSpan.FromMinutes(settings.ScanIntervalMinutes));
-
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     try
@@ -26,6 +27,16 @@ namespace EnergyStarZ
 
                         // PeriodicTimer 已经提供了准确的间隔，不需要额外的 Delay
                         EnergyManager.ThrottleAllUserBackgroundProcesses();
+
+                        // 托盘"重载配置"会原地更新 settings，间隔变化时同步定时器，
+                        // 使 ScanIntervalMinutes 无需重启即可生效
+                        var currentInterval = TimeSpan.FromMinutes(Math.Max(1, settings.ScanIntervalMinutes));
+                        if (currentInterval != interval)
+                        {
+                            interval = currentInterval;
+                            houseKeepingTimer.Period = interval;
+                            AppLogger.Info($"House keeping interval updated to {settings.ScanIntervalMinutes} minute(s).");
+                        }
                     }
                     catch (OperationCanceledException)
                     {
@@ -33,10 +44,7 @@ namespace EnergyStarZ
                     }
                     catch (Exception ex)
                     {
-                        if (settings.EnableLogging)
-                        {
-                            AppLogger.Error($"Housekeeping error: {ex.Message}");
-                        }
+                        AppLogger.Error($"Housekeeping error: {ex.Message}");
                     }
                 }
             }
@@ -46,12 +54,68 @@ namespace EnergyStarZ
             }
         }
 
+        private static void OnUiThreadException(object sender, ThreadExceptionEventArgs e)
+        {
+            AppLogger.Error($"UI thread exception: {e.Exception}");
+        }
+
+        private static void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            AppLogger.Error($"Fatal unhandled exception: {e.ExceptionObject}");
+
+            try
+            {
+                // 尽量恢复被节流的进程，避免退出后用户应用保持低优先级
+                EnergyManager.RestoreAllProcessesToNormalAsync().Wait(TimeSpan.FromSeconds(3));
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"Failed to restore processes after crash: {ex.Message}");
+            }
+
+            AppLogger.Flush();
+        }
+
+        private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            AppLogger.Error($"Unobserved task exception: {e.Exception}");
+            e.SetObserved();
+        }
+
         [STAThread]
         static int Main(string[] args)
         {
-            // 加载配置
-            var config = ConfigurationHelper.LoadConfiguration();
-            _settings = ConfigurationHelper.GetAppSettings(config);
+            // 单实例检查：多个实例会同时安装钩子并互相节流
+            using var singleInstanceMutex = new Mutex(
+                initiallyOwned: true,
+                @"Local\EnergyStarZ-7D2E4A18-3C6B-4F5D-9E1A-8B0C2D4F6A3C",
+                out bool isNewInstance);
+
+            if (!isNewInstance)
+            {
+                MessageBox.Show(
+                    "EnergyStarZ is already running. Please check your system tray.",
+                    "EnergyStarZ - Already Running",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return 0;
+            }
+
+            // 加载配置（失败时回退默认值，避免因配置文件缺失或损坏而无法启动）
+            try
+            {
+                var config = ConfigurationHelper.LoadConfiguration();
+                _settings = ConfigurationHelper.GetAppSettings(config);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Failed to load appsettings.json. Default settings will be used.\n\n{ex.Message}",
+                    "EnergyStarZ - Configuration",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                _settings = new AppSettings();
+            }
 
             // Well, this program only works for Windows Version starting with Cobalt...
             // Nickel or higher will be better, but at least it works in Cobalt
@@ -70,9 +134,18 @@ namespace EnergyStarZ
             // 初始化 EnergyManager 单例
             using var energyManager = EnergyManager.Instance;
 
+            // 应用配置（托盘菜单的"重载配置"之后会原地更新同一实例）
+            EnergyManager.LoadConfiguration(_settings);
+
             // 初始化 Windows Forms
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+
+            // 全局异常兜底：避免未处理异常直接杀死进程且不留任何痕迹
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += OnUiThreadException;
+            AppDomain.CurrentDomain.UnhandledException += OnUnhandledException;
+            TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
             // 设置初始模式
             if (Enum.TryParse<PowerMode>(_settings.InitialMode, true, out var initialMode))
@@ -95,9 +168,14 @@ namespace EnergyStarZ
             var houseKeepingTask = Task.Run(() => HouseKeepingThreadProc(_settings, cts.Token), cts.Token);
 
             // 根据初始模式决定是否订阅窗口事件
-            if (EnergyManager.CurrentMode != PowerMode.Paused)
+            if (EnergyManager.IsEnabled && EnergyManager.CurrentMode != PowerMode.Paused)
             {
                 HookManager.SubscribeToWindowEvents();
+            }
+            else
+            {
+                // 完全关闭（或暂停）模式下，清理上次异常退出可能残留的节流状态
+                _ = EnergyManager.CleanupThrottledProcessesAsync();
             }
 
             EnergyManager.ThrottleAllUserBackgroundProcesses();
@@ -107,6 +185,7 @@ namespace EnergyStarZ
 
             // 退出时清理资源
             AppLogger.Info("Application exiting, cleaning up...");
+            AppLogger.Flush();
 
             // 取消后台任务
             cts.Cancel();

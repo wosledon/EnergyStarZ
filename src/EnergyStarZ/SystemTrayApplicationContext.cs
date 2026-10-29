@@ -24,6 +24,7 @@ namespace EnergyStarZ
         private ToolStripMenuItem? _autoModeItem;
         private ToolStripMenuItem? _manualModeItem;
         private ToolStripMenuItem? _pausedModeItem;
+        private ToolStripMenuItem? _energyManagementItem;
 
         public SystemTrayApplicationContext(AppSettings settings)
         {
@@ -70,6 +71,12 @@ namespace EnergyStarZ
 
             var separator2 = new ToolStripSeparator();
 
+            _energyManagementItem = new ToolStripMenuItem(LocalizationManager.GetString("EnergyManagement"))
+            {
+                Checked = EnergyManager.IsEnabled
+            };
+            _energyManagementItem.Click += OnEnergyManagementClick;
+
             var languageMenu = new ToolStripMenuItem(LocalizationManager.GetString("SwitchLanguage"));
             var supportedCultures = LocalizationManager.GetSupportedCultures();
 
@@ -102,6 +109,7 @@ namespace EnergyStarZ
             menu.Items.Add(separator1);
             menu.Items.Add(autoPowerModeItem);
             menu.Items.Add(separator2);
+            menu.Items.Add(_energyManagementItem);
             menu.Items.Add(languageMenu);
             menu.Items.Add(separator3);
             menu.Items.Add(editConfigItem);
@@ -110,6 +118,24 @@ namespace EnergyStarZ
             menu.Items.Add(exitItem);
 
             return menu;
+        }
+
+        private void OnEnergyManagementClick(object? sender, EventArgs e)
+        {
+            bool enable = !EnergyManager.IsEnabled;
+            EnergyManager.SetEnabled(enable);
+
+            if (_energyManagementItem != null)
+            {
+                _energyManagementItem.Checked = enable;
+            }
+
+            ShowNotification(
+                LocalizationManager.GetString("EnergyManagement"),
+                enable
+                    ? LocalizationManager.GetString("EnergyManagementEnabled")
+                    : LocalizationManager.GetString("EnergyManagementDisabled"),
+                enable ? ToolTipIcon.Info : ToolTipIcon.Warning);
         }
 
         private void OnAutoPowerModeClick(object? sender, EventArgs e)
@@ -140,7 +166,7 @@ namespace EnergyStarZ
             }
         }
 
-        private async void SetPowerMode(PowerMode mode)
+        private void SetPowerMode(PowerMode mode)
         {
             EnergyManager.CurrentMode = mode;
 
@@ -169,14 +195,15 @@ namespace EnergyStarZ
 
         private string GetTrayIconText()
         {
-            var mode = EnergyManager.CurrentMode switch
+            var modeKey = EnergyManager.CurrentMode switch
             {
-                PowerMode.Auto => "Auto",
-                PowerMode.Manual => "Manual",
-                PowerMode.Paused => "Paused",
-                _ => "Unknown"
+                PowerMode.Auto => "AutoMode",
+                PowerMode.Manual => "ManualMode",
+                PowerMode.Paused => "PausedMode",
+                _ => "AutoMode"
             };
-            return $"EnergyStarZ - Mode: {mode}";
+
+            return $"EnergyStarZ - {LocalizationManager.GetString(modeKey)}";
         }
 
         private void UpdateMenuCheckStates()
@@ -228,7 +255,8 @@ namespace EnergyStarZ
         {
             try
             {
-                EnergyManager.LoadConfiguration();
+                // 原地更新同一个 settings 实例，使 HouseKeeping 等持有方立即看到新值
+                EnergyManager.LoadConfiguration(_settings);
                 ShowNotification(LocalizationManager.GetString("PowerModeChanged"), LocalizationManager.GetString("ConfigurationReloaded"), ToolTipIcon.Info);
             }
             catch (Exception ex)
@@ -242,7 +270,12 @@ namespace EnergyStarZ
         {
             LocalizationManager.SetCulture(culture);
 
+            var previousMenu = trayIcon.ContextMenuStrip;
             trayIcon.ContextMenuStrip = CreateContextMenu();
+            previousMenu?.Dispose();
+
+            // 托盘提示文本同样需要跟随语言刷新
+            trayIcon.Text = GetTrayIconText();
 
             ShowNotification(
                 LocalizationManager.GetString("PowerModeChanged"),

@@ -9,7 +9,7 @@ EnergyStarZ is a high-performance energy efficiency manager for Windows that aut
 - **Automatic Power Management**: Automatically detects foreground applications and applies efficiency settings to background processes
 - **Three Operation Modes**:
   - Auto Mode: Automatically adjusts based on foreground applications
-  - Manual Mode: Allows manual control over power settings
+  - Manual Mode: Stops reacting to foreground switches; background processes are still throttled periodically
   - Paused Mode: Disables all power management
 - **System Tray Interface**: Convenient access through system tray icon
 - **Hotkey Support**: Quick mode switching with keyboard shortcuts
@@ -44,6 +44,8 @@ EnergyStarZ is a high-performance energy efficiency manager for Windows that aut
 ### System Tray Menu
 Right-click the system tray icon to access the menu:
 - **Auto Mode/Manual Mode/Paused Mode**: Switch between operation modes
+- **Auto Power Mode**: Automatically use the aggressive profile on battery
+- **Energy Management**: Completely disable or re-enable energy management
 - **Edit Configuration**: Open appsettings.json for editing
 - **Reload Configuration**: Reload settings without restarting
 - **Exit**: Close the application
@@ -56,16 +58,45 @@ Right-click the system tray icon to access the menu:
 ### Configuration
 Edit `appsettings.json` to customize:
 - `ScanIntervalMinutes`: Interval for background process scanning (default: 10)
-- `ThrottleDelaySeconds`: Delay before applying efficiency settings (default: 30)
+- `SwitchDebounceMs`: Minimum interval between foreground switches before throttling the previous app (default: 500)
 - `EnableLogging`: Enable/disable logging (default: true)
+- `Enabled`: Master switch. `false` makes the app fully dormant: no hooks, no background work, no throttling, and any throttling left over from a previous run is restored on startup (default: true)
 - `InitialMode`: Startup mode (Auto, Manual, or Paused)
 - `BypassProcessList`: List of processes to exclude from power management
+- `EnableAutoPowerMode`: Automatically switch to aggressive throttling on battery (default: false)
+- `PauseOnAcPower`: When auto power mode is on, fully pause management on AC power (default: false)
+- `LRUCacheSize`: Number of recently used apps kept unthrottled (default: 5)
+- `LRUDecayMinutes`: Idle time before an LRU entry expires (default: 5)
+- `LRUMinSize` / `LRUMaxSize`: Bounds for automatic LRU size adjustment (default: 3 / 15)
+- `AudibleProcessList`: Processes treated as "possibly playing audio" and never throttled (heuristic)
+- `EnableEfficiencyCoreBinding`: Pin throttled processes to efficiency cores on hybrid CPUs (auto-disabled when undetectable, default: true)
+- `EnableLowMemoryPriority`: Apply low memory priority to throttled processes (very effective, may slow memory-heavy background apps, default: true)
+- `LowMemoryPriorityOnAcPower`: Also apply low memory priority on AC power (default: false, AC favors background task speed)
+- `DeepModeIdleMinutes`: Idle time before entering deep throttling mode (default: 5)
+- `LowBatteryEscalatePercent`: Battery level below which throttling is escalated (default: 20)
 
 ## How It Works
 
 EnergyStarZ monitors foreground application switches and applies power throttling to background processes. When a process becomes the foreground application, it receives higher priority and performance. Background processes are throttled to conserve energy.
 
 The application uses Windows' PROCESS_POWER_THROTTLING API to control process execution speed and adjusts process priorities to optimize energy consumption.
+
+### Tiered throttling policy
+
+Throttling is layered instead of a single on/off switch. Each background process is placed in a tier, and only the difference is applied when the tier changes:
+
+- **Protected (never throttled)**: hardcoded system processes, `BypassProcessList`, the foreground/pending app, LRU recently-used apps, processes with a visible top-level window, processes in `AudibleProcessList`, and anything in fullscreen/presentation mode.
+- **Tier 1** (default background): EcoQoS execution-speed throttle + `IDLE_PRIORITY_CLASS | PROCESS_MODE_BACKGROUND_BEGIN` (which also lowers I/O and memory scheduling) + low memory priority.
+- **Tier 2** (escalated): Tier 1 plus binding to efficiency cores on hybrid CPUs. Entered when the screen is off, the user has been idle, battery is low, or the process still burns CPU after feedback measurement (`QueryProcessCycleTime`).
+- **Restore**: all controls are cleared (EcoQoS off, normal priority, background mode end, CPU sets released).
+
+Measured under CPU contention on a 16-core machine, Tier 1 reduced a busy background process to ~28% of its cycles, and adding low memory priority brought it to ~4%, with full restoration afterwards.
+
+### Desktop and AC power
+
+Throttling is not only about battery life. On AC power (or a desktop) the benefit shifts to **responsiveness**: background processes yield CPU, I/O and memory instantly when the foreground app needs them, so frame pacing and app switching stay smooth. Measured with 16 saturated background processes and a 60fps foreground loop, Tier 1 cut wake-up latency p99 from 29.2ms to 16.2ms (-44%) and max from 31.3ms to 16.3ms (-48%), while background processes still consumed 95.6% of their previous CPU time — they finish their work, they just get out of the way.
+
+For this reason the default behaviour on AC power is to **keep throttling** (balanced profile: no low memory priority, no low-battery escalation). Set `PauseOnAcPower` to `true` if you prefer management to stop completely on AC.
 
 ## Requirements
 

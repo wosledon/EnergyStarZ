@@ -11,7 +11,15 @@ namespace EnergyStarZ.Resources
         private static LocalizationData? _cachedData;
         private static readonly object _lock = new();
 
-        private const string LocalizationFilePath = "Resources/Localization.json";
+        // 本地化内容文件随应用发布，使用应用基目录定位，避免受当前工作目录影响
+        private static readonly string LocalizationFilePath =
+            Path.Combine(AppContext.BaseDirectory, "Resources", "Localization.json");
+
+        // 用户语言偏好保存在用户目录：安装目录可能只读（如 Program Files），
+        // 且会在应用更新时被覆盖
+        private static readonly string LanguagePreferenceFilePath =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "EnergyStarZ", "language.txt");
 
         static LocalizationManager()
         {
@@ -87,20 +95,24 @@ namespace EnergyStarZ.Resources
 
         private static string GetSavedCulture()
         {
+            // 优先读取用户目录中的语言偏好
             try
             {
-                if (_cachedData == null)
+                if (File.Exists(LanguagePreferenceFilePath))
                 {
-                    var jsonContent = File.ReadAllText(LocalizationFilePath);
-                    _cachedData = JsonSerializer.Deserialize<LocalizationData>(jsonContent)!;
+                    var savedCulture = File.ReadAllText(LanguagePreferenceFilePath).Trim();
+                    if (!string.IsNullOrEmpty(savedCulture))
+                    {
+                        return savedCulture;
+                    }
                 }
-
-                return _cachedData.Language?.CurrentCulture ?? "en-US";
             }
             catch
             {
-                return "en-US";
+                // 读取失败时回退到内容文件中的默认值
             }
+
+            return _cachedData?.Language?.CurrentCulture ?? "en-US";
         }
 
         private static void SaveCulture(string cultureName)
@@ -109,23 +121,13 @@ namespace EnergyStarZ.Resources
             {
                 lock (_lock)
                 {
-                    var jsonString = File.ReadAllText(LocalizationFilePath);
-                    var localizationData = JsonSerializer.Deserialize<LocalizationData>(jsonString)!;
+                    var directory = Path.GetDirectoryName(LanguagePreferenceFilePath)!;
+                    Directory.CreateDirectory(directory);
 
-                    if (localizationData.Language != null)
-                    {
-                        localizationData.Language.CurrentCulture = cultureName;
-
-                        var options = new JsonSerializerOptions { WriteIndented = true };
-                        var updatedJsonString = JsonSerializer.Serialize(localizationData, options);
-
-                        // 原子写入：先写入临时文件，再替换原文件
-                        var tempFilePath = LocalizationFilePath + ".tmp";
-                        File.WriteAllText(tempFilePath, updatedJsonString);
-                        File.Move(tempFilePath, LocalizationFilePath, overwrite: true);
-
-                        _cachedData = localizationData;
-                    }
+                    // 原子写入：先写入临时文件，再替换目标文件
+                    var tempFilePath = LanguagePreferenceFilePath + ".tmp";
+                    File.WriteAllText(tempFilePath, cultureName);
+                    File.Move(tempFilePath, LanguagePreferenceFilePath, overwrite: true);
                 }
             }
             catch (Exception ex)
@@ -169,5 +171,8 @@ namespace EnergyStarZ.Resources
         public required Dictionary<string, string> AutoPowerMode { get; set; }
         public required Dictionary<string, string> AutoPowerModeEnabled { get; set; }
         public required Dictionary<string, string> AutoPowerModeDisabled { get; set; }
+        public required Dictionary<string, string> EnergyManagement { get; set; }
+        public required Dictionary<string, string> EnergyManagementEnabled { get; set; }
+        public required Dictionary<string, string> EnergyManagementDisabled { get; set; }
     }
 }
