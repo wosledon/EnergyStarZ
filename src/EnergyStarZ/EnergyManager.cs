@@ -75,14 +75,12 @@ namespace EnergyStarZ
         private static int _lruCacheSize = 5;
         private static int _minLRUSize = 3;
         private static int _maxLRUSize = 15;
-        private static TimeSpan _timeoutPeriod = TimeSpan.FromSeconds(30);
         private static TimeSpan _lruDecayPeriod = TimeSpan.FromMinutes(5); // LRU 时间衰减周期
         private static DateTime _lastLRUAdjustment = DateTime.UtcNow;
         private static int _foregroundSwitchCount = 0; // 前台切换计数器（用于自动调整）
 
         private static readonly object _pendingProcLock = new();
         private static uint _pendingProcPid = 0;
-        private static string _pendingProcName = "";
 
         private static IntPtr pThrottleOn = IntPtr.Zero;
         private static IntPtr pThrottleOff = IntPtr.Zero;
@@ -112,6 +110,9 @@ namespace EnergyStarZ
         }
 
         private static DateTime _lastSwitchTime = DateTime.MinValue;
+        // 电源状态切换的独立防抖时间戳：_lastSwitchTime 会被每次前台窗口
+        // 切换更新，复用它会导致用户活跃操作时漏掉 AC/电池状态变化
+        private static DateTime _lastPowerModeSwitchTime = DateTime.MinValue;
         private static int _switchDebounceMs = DefaultSwitchDebounceMs;
 
         // 单例实例用于生命周期管理
@@ -152,7 +153,6 @@ namespace EnergyStarZ
                 lock (_lruLock)
                 {
                     _lruCacheSize = Math.Max(1, settings.LRUCacheSize);
-                    _timeoutPeriod = TimeSpan.FromSeconds(settings.TimeoutSeconds);
 
                     // 加载 LRU 时间衰减配置（默认 5 分钟）
                     if (settings.LRUDecayMinutes > 0)
@@ -306,8 +306,8 @@ namespace EnergyStarZ
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
 
             // 防抖：避免电池/AC 快速切换时频繁触发
-            var timeSinceLastSwitch = DateTime.UtcNow - _lastSwitchTime;
-            if (timeSinceLastSwitch < TimeSpan.FromSeconds(10))
+            var timeSinceLastPowerSwitch = DateTime.UtcNow - _lastPowerModeSwitchTime;
+            if (timeSinceLastPowerSwitch < TimeSpan.FromSeconds(10))
             {
                 return;
             }
@@ -329,7 +329,7 @@ namespace EnergyStarZ
                     AppLogger.Info("Switched to AC Mode - Energy saving paused");
                 }
 
-                _lastSwitchTime = DateTime.UtcNow;
+                _lastPowerModeSwitchTime = DateTime.UtcNow;
             }
         }
 
@@ -556,7 +556,9 @@ namespace EnergyStarZ
 
         private static void ToggleEfficiencyMode(IntPtr hProcess, bool enable)
         {
-            if (CurrentMode == PowerMode.Paused)
+            // 暂停模式下不施加节流，但必须允许恢复（enable=false），
+            // 否则切换到暂停模式时无法还原已被节流的进程
+            if (enable && CurrentMode == PowerMode.Paused)
                 return;
 
             try
@@ -590,46 +592,36 @@ namespace EnergyStarZ
 
             var activeIds = new HashSet<int>(processes.Length);
 
-            try
+            foreach (var proc in processes)
             {
-                foreach (var proc in processes)
+                try
                 {
-                    try
+                    if (proc.SessionId != CurrentSessionId)
                     {
-                        if (proc.SessionId != CurrentSessionId)
-                        {
-                            continue;
-                        }
-
-                        activeIds.Add(proc.Id);
-
-                        var procName = proc.ProcessName + ".exe";
-                        if (!ProcessCache.ContainsKey(proc.Id))
-                        {
-                            ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, procName));
-                        }
-                        else
-                        {
-                            var existing = ProcessCache[proc.Id];
-                            if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
-                            {
-                                ProcessCache[proc.Id] = new ProcessInfo(proc.Id, procName);
-                            }
-                        }
+                        continue;
                     }
-                    catch
+
+                    activeIds.Add(proc.Id);
+
+                    var procName = proc.ProcessName + ".exe";
+                    if (!ProcessCache.ContainsKey(proc.Id))
                     {
-                        // 忽略单个进程的异常
+                        ProcessCache.TryAdd(proc.Id, new ProcessInfo(proc.Id, procName));
                     }
-                    finally
+                    else
                     {
-                        proc.Dispose();
+                        var existing = ProcessCache[proc.Id];
+                        if (!existing.Name.Equals(procName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ProcessCache[proc.Id] = new ProcessInfo(proc.Id, procName);
+                        }
                     }
                 }
-            }
-            finally
-            {
-                foreach (var proc in processes)
+                catch
+                {
+                    // 忽略单个进程的异常
+                }
+                finally
                 {
                     proc.Dispose();
                 }
@@ -791,12 +783,12 @@ namespace EnergyStarZ
                 (uint)(Interop.Win32Api.ProcessAccessFlags.QueryLimitedInformation | Interop.Win32Api.ProcessAccessFlags.SetInformation), false, procId);
             if (procHandle == IntPtr.Zero) return;
 
-            bool childHandleReplaced = false;
+            uint actualProcId = procId;
+            IntPtr actualProcHandle = procHandle;
+
             try
             {
                 var appName = GetProcessNameFromHandle(procHandle);
-                uint actualProcId = procId;
-                IntPtr actualProcHandle = procHandle;
 
                 // UWP needs to be handled in a special case
                 if (appName.Equals(UWPFrameHostApp, StringComparison.OrdinalIgnoreCase))
@@ -826,11 +818,11 @@ namespace EnergyStarZ
 
                     if (childProcessInfo.HasValue)
                     {
+                        // 原句柄已关闭，actualProcHandle 改持子进程句柄，由 finally 统一释放
                         Interop.Win32Api.CloseHandle(actualProcHandle);
                         actualProcHandle = childProcessInfo.Value.Handle;
                         actualProcId = childProcessInfo.Value.Pid;
                         appName = childProcessInfo.Value.Name;
-                        childHandleReplaced = true;
                     }
                 }
 
@@ -903,17 +895,13 @@ namespace EnergyStarZ
                 lock (_pendingProcLock)
                 {
                     _pendingProcPid = actualProcId;
-                    _pendingProcName = appName;
                 }
             }
             finally
             {
-                // 如果使用了子进程句柄，原句柄已关闭，但子句柄不应再关闭
-                // 如果没使用子进程句柄，原句柄需要关闭
-                if (!childHandleReplaced)
-                {
-                    Interop.Win32Api.CloseHandle(procHandle);
-                }
+                // actualProcHandle 始终指向当前持有的句柄：未替换时即原句柄；
+                // 替换为 UWP 子进程句柄后，原句柄已在上面关闭
+                Interop.Win32Api.CloseHandle(actualProcHandle);
             }
         }
 

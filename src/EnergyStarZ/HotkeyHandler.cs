@@ -38,6 +38,21 @@ namespace EnergyStarZ
             
             // 注册热键
             RegisterHotkeys();
+
+            // WinEvent out-of-context 钩子必须由运行消息循环的 UI 线程安装/卸载，
+            // 后台线程安装的钩子收不到前台切换事件。
+            // 已在 UI 线程时同步执行，否则投递到消息队列
+            HookManager.SetUiInvoker(action =>
+            {
+                if (!IsHandleCreated || !InvokeRequired)
+                {
+                    action();
+                }
+                else
+                {
+                    BeginInvoke(action);
+                }
+            });
         }
 
         private void RegisterHotkeys()

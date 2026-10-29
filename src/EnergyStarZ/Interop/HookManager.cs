@@ -13,6 +13,10 @@ namespace EnergyStarZ.Interop
 
         private const int EVENT_SYSTEM_FOREGROUND = 3;
 
+        // out-of-context 的 WinEvent 钩子只能由运行消息循环的线程安装/卸载，
+        // 后台线程安装的钩子收不到前台切换事件，因此统一封送到 UI 线程执行
+        private static Action<Action>? _uiInvoker;
+
         private static IntPtr windowEventHook;
         // Explicitly declare it to prevent GC
         // See: https://stackoverflow.com/questions/6193711/call-has-been-made-on-garbage-collected-delegate-in-c
@@ -20,7 +24,45 @@ namespace EnergyStarZ.Interop
 
         private bool disposedValue;
 
+        public static void SetUiInvoker(Action<Action> uiInvoker)
+        {
+            _uiInvoker = uiInvoker;
+        }
+
         public static void SubscribeToWindowEvents()
+        {
+            if (_uiInvoker is { } invoker)
+            {
+                invoker(static () =>
+                {
+                    try
+                    {
+                        SubscribeToWindowEventsCore();
+                    }
+                    catch (Exception ex)
+                    {
+                        // 封送到 UI 线程后异常无法传回调用方，记录日志即可
+                        AppLogger.Error($"SubscribeToWindowEvents: {ex.Message}");
+                    }
+                });
+                return;
+            }
+
+            SubscribeToWindowEventsCore();
+        }
+
+        public static void UnsubscribeWindowEvents()
+        {
+            if (_uiInvoker is { } invoker)
+            {
+                invoker(UnsubscribeWindowEventsCore);
+                return;
+            }
+
+            UnsubscribeWindowEventsCore();
+        }
+
+        private static void SubscribeToWindowEventsCore()
         {
             if (windowEventHook == IntPtr.Zero)
             {
@@ -40,7 +82,7 @@ namespace EnergyStarZ.Interop
             }
         }
 
-        public static void UnsubscribeWindowEvents()
+        private static void UnsubscribeWindowEventsCore()
         {
             if (windowEventHook != IntPtr.Zero)
             {

@@ -56,10 +56,14 @@ Right-click the system tray icon to access the menu:
 ### Configuration
 Edit `appsettings.json` to customize:
 - `ScanIntervalMinutes`: Interval for background process scanning (default: 10)
-- `ThrottleDelaySeconds`: Delay before applying efficiency settings (default: 30)
+- `SwitchDebounceMs`: Minimum interval between foreground switches before throttling the previous app (default: 500)
 - `EnableLogging`: Enable/disable logging (default: true)
 - `InitialMode`: Startup mode (Auto, Manual, or Paused)
 - `BypassProcessList`: List of processes to exclude from power management
+- `EnableAutoPowerMode`: Auto-enable energy saving on battery and pause on AC power (default: false)
+- `LRUCacheSize`: Number of recently used apps kept unthrottled (default: 5)
+- `LRUDecayMinutes`: Idle time before an LRU entry expires (default: 5)
+- `LRUMinSize` / `LRUMaxSize`: Bounds for automatic LRU size adjustment (default: 3 / 15)
 
 ## How It Works
 

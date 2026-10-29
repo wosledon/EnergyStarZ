@@ -56,10 +56,14 @@ EnergyStarZ 是一款为 Windows 设计的高性能能源效率管理器，通�
 ### 配置
 编辑 `appsettings.json` 自定义：
 - `ScanIntervalMinutes`：后台进程扫描间隔（默认：10）
-- `ThrottleDelaySeconds`：应用效率设置前的延迟（默认：30）
+- `SwitchDebounceMs`：前台切换后节流上一个应用所需的最小间隔（默认：500）
 - `EnableLogging`：启用/禁用日志（默认：true）
 - `InitialMode`：启动模式（自动、手动或暂停）
 - `BypassProcessList`：从电源管理中排除的进程列表
+- `EnableAutoPowerMode`：使用电池时自动开启节能、接通交流电时暂停（默认：false）
+- `LRUCacheSize`：保持不节流的最近使用应用数量（默认：5）
+- `LRUDecayMinutes`：LRU 条目闲置多久后过期（默认：5）
+- `LRUMinSize` / `LRUMaxSize`：LRU 大小自动调整的上下限（默认：3 / 15）
 
 ## 工作原理
 

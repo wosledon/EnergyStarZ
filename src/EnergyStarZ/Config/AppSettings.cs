@@ -5,9 +5,7 @@ namespace EnergyStarZ.Config
     public class AppSettings
     {
         private int _scanIntervalMinutes = 10;
-        private int _throttleDelaySeconds = 30;
         private int _lruCacheSize = 5;
-        private int _timeoutSeconds = 30;
         private int _switchDebounceMs = 500;
         private int _lruDecayMinutes = 5;
         private int _lruMinSize = 3;
@@ -19,12 +17,6 @@ namespace EnergyStarZ.Config
             set => _scanIntervalMinutes = Math.Max(1, value); 
         }
         
-        public int ThrottleDelaySeconds 
-        { 
-            get => _throttleDelaySeconds; 
-            set => _throttleDelaySeconds = Math.Max(1, value); 
-        }
-        
         public bool EnableLogging { get; set; } = true;
         public string LogLevel { get; set; } = "Information";
         public string InitialMode { get; set; } = "Auto";
@@ -34,12 +26,6 @@ namespace EnergyStarZ.Config
         { 
             get => _lruCacheSize; 
             set => _lruCacheSize = Math.Clamp(value, 1, 50); 
-        }
-        
-        public int TimeoutSeconds 
-        { 
-            get => _timeoutSeconds; 
-            set => _timeoutSeconds = Math.Max(1, value); 
         }
         
         public bool EnableAutoPowerMode { get; set; } = false;
