@@ -210,6 +210,8 @@ namespace EnergyStarZ
                 ProcessContext.SetAudibleProcessList(settings.AudibleProcessList);
                 ProcessContext.EfficiencyCoreBindingEnabled = settings.EnableEfficiencyCoreBinding;
                 LowMemoryPriorityEnabled = settings.EnableLowMemoryPriority;
+                LowMemoryPriorityOnAcPower = settings.LowMemoryPriorityOnAcPower;
+                PauseOnAcPower = settings.PauseOnAcPower;
                 DeepModeIdleMinutes = settings.DeepModeIdleMinutes;
                 LowBatteryEscalatePercent = settings.LowBatteryEscalatePercent;
             }
@@ -344,9 +346,7 @@ namespace EnergyStarZ
 
         private static void CheckPowerStatus()
         {
-            if (!_autoPowerModeEnabled)
-                return;
-
+            // 电源状态始终更新：它决定节流策略的激进程度（电池=激进，交流电=偏流畅度）
             var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
 
@@ -361,6 +361,20 @@ namespace EnergyStarZ
                 _batteryLevelPercent = -1;
             }
 
+            if (isOnBattery != _isBatteryPowered)
+            {
+                _isBatteryPowered = isOnBattery;
+                AppLogger.Info(isOnBattery
+                    ? "Power source changed to battery (aggressive throttling profile)."
+                    : "Power source changed to AC (balanced throttling profile).");
+
+                // 档位变化会改变内存优先级等策略，立即按新档位重算
+                ThrottleAllUserBackgroundProcesses();
+            }
+
+            if (!_autoPowerModeEnabled)
+                return;
+
             // 防抖：避免电池/AC 快速切换时频繁触发
             var timeSinceLastPowerSwitch = DateTime.UtcNow - _lastPowerModeSwitchTime;
             if (timeSinceLastPowerSwitch < TimeSpan.FromSeconds(10))
@@ -368,23 +382,30 @@ namespace EnergyStarZ
                 return;
             }
 
-            if (isOnBattery != _isBatteryPowered)
+            if (isOnBattery != _wasOnBatteryAtLastSwitch)
             {
-                _isBatteryPowered = isOnBattery;
-
                 if (isOnBattery)
                 {
                     CurrentMode = PowerMode.Auto;
                     HookManager.SubscribeToWindowEvents();
                     AppLogger.Info("Switched to Battery Mode - Automatic energy saving enabled");
                 }
-                else
+                else if (_pauseOnAcPower)
                 {
+                    // 仅在用户明确要求时，接交流电才暂停管理
                     CurrentMode = PowerMode.Paused;
                     HookManager.UnsubscribeWindowEvents();
-                    AppLogger.Info("Switched to AC Mode - Energy saving paused");
+                    AppLogger.Info("Switched to AC Mode - Energy saving paused (PauseOnAcPower)");
+                }
+                else
+                {
+                    // 默认：交流电上继续节流，收益是前台流畅度而非省电
+                    CurrentMode = PowerMode.Auto;
+                    HookManager.SubscribeToWindowEvents();
+                    AppLogger.Info("Switched to AC Mode - Background throttling kept for responsiveness");
                 }
 
+                _wasOnBatteryAtLastSwitch = isOnBattery;
                 _lastPowerModeSwitchTime = DateTime.UtcNow;
             }
         }
@@ -613,8 +634,9 @@ namespace EnergyStarZ
                     : Interop.Win32Api.PriorityClass.NORMAL_PRIORITY_CLASS | Interop.Win32Api.PriorityClass.PROCESS_MODE_BACKGROUND_END);
 
                 // 低内存优先级：让内存管理器更早回收该进程工作集，降低内存功耗
-                // （效果很强，但可能让内存密集型后台程序明显变慢，可在配置中关闭）
-                if (_lowMemoryPriorityEnabled)
+                // （效果很强，但可能让内存密集型后台程序明显变慢，可在配置中关闭；
+                //   默认只在电池供电下启用，交流电上以避免影响后台任务速度为主）
+                if (ShouldApplyLowMemoryPriority)
                 {
                     int memoryPriority = enable ? MemoryPriorityLow : MemoryPriorityNormal;
                     IntPtr pMemoryPriority = Marshal.AllocHGlobal(sizeof(int));
@@ -641,12 +663,38 @@ namespace EnergyStarZ
         private const int MemoryPriorityNormal = 5;
 
         private static volatile bool _lowMemoryPriorityEnabled = true;
+        private static volatile bool _lowMemoryPriorityOnAcPower = false;
+        private static volatile bool _pauseOnAcPower = false;
+        private static bool _wasOnBatteryAtLastSwitch = true;
 
         public static bool LowMemoryPriorityEnabled
         {
             get => _lowMemoryPriorityEnabled;
             set => _lowMemoryPriorityEnabled = value;
         }
+
+        public static bool LowMemoryPriorityOnAcPower
+        {
+            get => _lowMemoryPriorityOnAcPower;
+            set => _lowMemoryPriorityOnAcPower = value;
+        }
+
+        public static bool PauseOnAcPower
+        {
+            get => _pauseOnAcPower;
+            set => _pauseOnAcPower = value;
+        }
+
+        /// <summary>
+        /// 是否使用激进档位（电池供电）。交流电/台式机使用偏流畅度的平衡档
+        /// </summary>
+        public static bool IsAggressiveProfile => _isBatteryPowered;
+
+        /// <summary>
+        /// 当前是否应该施加低内存优先级
+        /// </summary>
+        private static bool ShouldApplyLowMemoryPriority =>
+            _lowMemoryPriorityEnabled && (_isBatteryPowered || _lowMemoryPriorityOnAcPower);
 
         /// <summary>
         /// 把进程绑定到能效核（或解除绑定）。仅在探测到混合架构 CPU 时生效
@@ -895,7 +943,8 @@ namespace EnergyStarZ
                 var target = deepMode ? ThrottleTier.Tier2 : ThrottleTier.Tier1;
 
                 // 低电量时同样提升一档
-                if (!deepMode && _batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
+                if (!deepMode && _isBatteryPowered &&
+                    _batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
                 {
                     target = ThrottleTier.Tier2;
                 }
@@ -920,7 +969,11 @@ namespace EnergyStarZ
         /// </summary>
         private static void ApplyTier(ProcessState state, ThrottleTier target)
         {
-            if (state.Tier == target)
+            // 电源档位变化时（如拔掉电源）需要重新施加内存优先级
+            bool memoryPriorityChanged =
+                state.Tier != ThrottleTier.None && state.MemoryPriorityApplied != ShouldApplyLowMemoryPriority;
+
+            if (state.Tier == target && !memoryPriorityChanged)
                 return;
 
             var hProcess = Interop.Win32Api.OpenProcess(
@@ -938,6 +991,7 @@ namespace EnergyStarZ
                 {
                     ToggleEfficiencyMode(hProcess, false);
                     ToggleEfficiencyCoreBinding(hProcess, false);
+                    state.MemoryPriorityApplied = false;
                     AppLogger.Info($"[RESTORE] {state.Name} (PID: {state.Id})");
                 }
                 else
@@ -952,6 +1006,7 @@ namespace EnergyStarZ
                         ToggleEfficiencyCoreBinding(hProcess, false);
                     }
 
+                    state.MemoryPriorityApplied = ShouldApplyLowMemoryPriority;
                     AppLogger.Info($"[THROTTLE:{target}] {state.Name} (PID: {state.Id})");
                 }
 
@@ -982,7 +1037,8 @@ namespace EnergyStarZ
             if (ProcessContext.GetIdleTimeMs() > DeepModeIdleMinutes * 60_000)
                 return true;
 
-            if (_batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
+            // 低电量只在电池供电下触发（交流电上电量正在回升）
+            if (_isBatteryPowered && _batteryLevelPercent > 0 && _batteryLevelPercent < LowBatteryEscalatePercent)
                 return true;
 
             return false;
@@ -1212,6 +1268,7 @@ namespace EnergyStarZ
             public int Id { get; }
             public string Name { get; set; }
             public ThrottleTier Tier { get; set; } = ThrottleTier.None;
+            public bool MemoryPriorityApplied { get; set; }
             public ulong LastCycles { get; set; }
             public DateTime LastMeasuredAt { get; set; } = DateTime.UtcNow;
             public int ConsecutiveHighCpu { get; set; }

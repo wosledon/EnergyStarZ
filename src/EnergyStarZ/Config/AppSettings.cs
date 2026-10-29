@@ -44,6 +44,17 @@ namespace EnergyStarZ.Config
         public bool EnableLowMemoryPriority { get; set; } = true;
 
         /// <summary>
+        /// 交流电供电时也施加低内存优先级（默认关闭：交流电上以后台任务速度优先）
+        /// </summary>
+        public bool LowMemoryPriorityOnAcPower { get; set; } = false;
+
+        /// <summary>
+        /// 启用自动电源模式后，接通交流电时是否完全暂停管理。
+        /// 默认 false：交流电上继续节流，收益是前台流畅度而非省电
+        /// </summary>
+        public bool PauseOnAcPower { get; set; } = false;
+
+        /// <summary>
         /// 用户空闲多少分钟后进入深度模式（更激进节流）
         /// </summary>
         public int DeepModeIdleMinutes { get; set; } = 5;

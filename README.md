@@ -60,13 +60,15 @@ Edit `appsettings.json` to customize:
 - `EnableLogging`: Enable/disable logging (default: true)
 - `InitialMode`: Startup mode (Auto, Manual, or Paused)
 - `BypassProcessList`: List of processes to exclude from power management
-- `EnableAutoPowerMode`: Auto-enable energy saving on battery and pause on AC power (default: false)
+- `EnableAutoPowerMode`: Automatically switch to aggressive throttling on battery (default: false)
+- `PauseOnAcPower`: When auto power mode is on, fully pause management on AC power (default: false)
 - `LRUCacheSize`: Number of recently used apps kept unthrottled (default: 5)
 - `LRUDecayMinutes`: Idle time before an LRU entry expires (default: 5)
 - `LRUMinSize` / `LRUMaxSize`: Bounds for automatic LRU size adjustment (default: 3 / 15)
 - `AudibleProcessList`: Processes treated as "possibly playing audio" and never throttled (heuristic)
 - `EnableEfficiencyCoreBinding`: Pin throttled processes to efficiency cores on hybrid CPUs (auto-disabled when undetectable, default: true)
 - `EnableLowMemoryPriority`: Apply low memory priority to throttled processes (very effective, may slow memory-heavy background apps, default: true)
+- `LowMemoryPriorityOnAcPower`: Also apply low memory priority on AC power (default: false, AC favors background task speed)
 - `DeepModeIdleMinutes`: Idle time before entering deep throttling mode (default: 5)
 - `LowBatteryEscalatePercent`: Battery level below which throttling is escalated (default: 20)
 
@@ -86,6 +88,12 @@ Throttling is layered instead of a single on/off switch. Each background process
 - **Restore**: all controls are cleared (EcoQoS off, normal priority, background mode end, CPU sets released).
 
 Measured under CPU contention on a 16-core machine, Tier 1 reduced a busy background process to ~28% of its cycles, and adding low memory priority brought it to ~4%, with full restoration afterwards.
+
+### Desktop and AC power
+
+Throttling is not only about battery life. On AC power (or a desktop) the benefit shifts to **responsiveness**: background processes yield CPU, I/O and memory instantly when the foreground app needs them, so frame pacing and app switching stay smooth. Measured with 16 saturated background processes and a 60fps foreground loop, Tier 1 cut wake-up latency p99 from 29.2ms to 16.2ms (-44%) and max from 31.3ms to 16.3ms (-48%), while background processes still consumed 95.6% of their previous CPU time — they finish their work, they just get out of the way.
+
+For this reason the default behaviour on AC power is to **keep throttling** (balanced profile: no low memory priority, no low-battery escalation). Set `PauseOnAcPower` to `true` if you prefer management to stop completely on AC.
 
 ## Requirements
 

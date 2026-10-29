@@ -61,12 +61,14 @@ EnergyStarZ 是一款为 Windows 设计的高性能能源效率管理器，通�
 - `InitialMode`：启动模式（自动、手动或暂停）
 - `BypassProcessList`：从电源管理中排除的进程列表
 - `EnableAutoPowerMode`：使用电池时自动开启节能、接通交流电时暂停（默认：false）
+- `PauseOnAcPower`：启用自动电源模式后，接通交流电时是否完全暂停管理（默认：false）
 - `LRUCacheSize`：保持不节流的最近使用应用数量（默认：5）
 - `LRUDecayMinutes`：LRU 条目闲置多久后过期（默认：5）
 - `LRUMinSize` / `LRUMaxSize`：LRU 大小自动调整的上下限（默认：3 / 15）
 - `AudibleProcessList`：被视为"可能正在播音"而永不节流的进程名单（启发式）
 - `EnableEfficiencyCoreBinding`：混合架构 CPU 上把被节流进程绑定到能效核（探测失败时自动禁用，默认：true）
 - `EnableLowMemoryPriority`：对被节流进程设置低内存优先级（效果很强，但可能让内存密集型后台程序明显变慢，默认：true）
+- `LowMemoryPriorityOnAcPower`：交流电供电时也施加低内存优先级（默认：false，交流电上以后台任务速度优先）
 - `DeepModeIdleMinutes`：用户空闲多少分钟后进入深度节流模式（默认：5）
 - `LowBatteryEscalatePercent`：电量低于该百分比时提升节流强度（默认：20）
 
@@ -86,6 +88,12 @@ EnergyStarZ 监控前台应用程序切换，并对后台进程应用电源限�
 - **还原**：清除全部控制（EcoQoS 关闭、恢复正常优先级、退出后台模式、释放 CPU set 绑定）。
 
 在 16 核机器上、有 CPU 竞争的环境实测：Tier 1 可把繁忙后台进程的 CPU 周期降到约 28%，叠加低内存优先级后约 4%，退出时完全恢复。
+
+### 台式机与接电源场景
+
+节流并不只是为了省电。接交流电（或台式机）时，收益转向**流畅度**：后台进程在前台应用需要 CPU/IO/内存的瞬间立刻让位，帧节奏与切换应用的卡顿随之改善。实测（16 个满载后台进程 + 60fps 前台循环）：Tier 1 把唤醒延迟 p99 从 29.2ms 降到 16.2ms（-44%），最大值从 31.3ms 降到 16.3ms（-48%），而后台进程仍消耗原有 95.6% 的 CPU 时间——活照样干完，只是不再挡路。
+
+因此交流电下的默认行为是**继续保持节流**（平衡档：不施加低内存优先级、不做低电量升级）。如希望接电源时完全停止管理，可设置 `PauseOnAcPower` 为 `true`。
 
 ## 系统要求
 
