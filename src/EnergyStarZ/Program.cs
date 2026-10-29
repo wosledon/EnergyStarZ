@@ -168,9 +168,14 @@ namespace EnergyStarZ
             var houseKeepingTask = Task.Run(() => HouseKeepingThreadProc(_settings, cts.Token), cts.Token);
 
             // 根据初始模式决定是否订阅窗口事件
-            if (EnergyManager.CurrentMode != PowerMode.Paused)
+            if (EnergyManager.IsEnabled && EnergyManager.CurrentMode != PowerMode.Paused)
             {
                 HookManager.SubscribeToWindowEvents();
+            }
+            else
+            {
+                // 完全关闭（或暂停）模式下，清理上次异常退出可能残留的节流状态
+                _ = EnergyManager.CleanupThrottledProcessesAsync();
             }
 
             EnergyManager.ThrottleAllUserBackgroundProcesses();

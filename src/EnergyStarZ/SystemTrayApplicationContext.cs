@@ -24,6 +24,7 @@ namespace EnergyStarZ
         private ToolStripMenuItem? _autoModeItem;
         private ToolStripMenuItem? _manualModeItem;
         private ToolStripMenuItem? _pausedModeItem;
+        private ToolStripMenuItem? _energyManagementItem;
 
         public SystemTrayApplicationContext(AppSettings settings)
         {
@@ -70,6 +71,12 @@ namespace EnergyStarZ
 
             var separator2 = new ToolStripSeparator();
 
+            _energyManagementItem = new ToolStripMenuItem(LocalizationManager.GetString("EnergyManagement"))
+            {
+                Checked = EnergyManager.IsEnabled
+            };
+            _energyManagementItem.Click += OnEnergyManagementClick;
+
             var languageMenu = new ToolStripMenuItem(LocalizationManager.GetString("SwitchLanguage"));
             var supportedCultures = LocalizationManager.GetSupportedCultures();
 
@@ -102,6 +109,7 @@ namespace EnergyStarZ
             menu.Items.Add(separator1);
             menu.Items.Add(autoPowerModeItem);
             menu.Items.Add(separator2);
+            menu.Items.Add(_energyManagementItem);
             menu.Items.Add(languageMenu);
             menu.Items.Add(separator3);
             menu.Items.Add(editConfigItem);
@@ -110,6 +118,24 @@ namespace EnergyStarZ
             menu.Items.Add(exitItem);
 
             return menu;
+        }
+
+        private void OnEnergyManagementClick(object? sender, EventArgs e)
+        {
+            bool enable = !EnergyManager.IsEnabled;
+            EnergyManager.SetEnabled(enable);
+
+            if (_energyManagementItem != null)
+            {
+                _energyManagementItem.Checked = enable;
+            }
+
+            ShowNotification(
+                LocalizationManager.GetString("EnergyManagement"),
+                enable
+                    ? LocalizationManager.GetString("EnergyManagementEnabled")
+                    : LocalizationManager.GetString("EnergyManagementDisabled"),
+                enable ? ToolTipIcon.Info : ToolTipIcon.Warning);
         }
 
         private void OnAutoPowerModeClick(object? sender, EventArgs e)

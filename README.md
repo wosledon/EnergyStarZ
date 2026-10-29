@@ -44,6 +44,8 @@ EnergyStarZ is a high-performance energy efficiency manager for Windows that aut
 ### System Tray Menu
 Right-click the system tray icon to access the menu:
 - **Auto Mode/Manual Mode/Paused Mode**: Switch between operation modes
+- **Auto Power Mode**: Automatically use the aggressive profile on battery
+- **Energy Management**: Completely disable or re-enable energy management
 - **Edit Configuration**: Open appsettings.json for editing
 - **Reload Configuration**: Reload settings without restarting
 - **Exit**: Close the application
@@ -58,6 +60,7 @@ Edit `appsettings.json` to customize:
 - `ScanIntervalMinutes`: Interval for background process scanning (default: 10)
 - `SwitchDebounceMs`: Minimum interval between foreground switches before throttling the previous app (default: 500)
 - `EnableLogging`: Enable/disable logging (default: true)
+- `Enabled`: Master switch. `false` makes the app fully dormant: no hooks, no background work, no throttling, and any throttling left over from a previous run is restored on startup (default: true)
 - `InitialMode`: Startup mode (Auto, Manual, or Paused)
 - `BypassProcessList`: List of processes to exclude from power management
 - `EnableAutoPowerMode`: Automatically switch to aggressive throttling on battery (default: false)

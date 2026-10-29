@@ -20,6 +20,12 @@ namespace EnergyStarZ.Config
         public bool EnableLogging { get; set; } = true;
         public string LogLevel { get; set; } = "Information";
         public string InitialMode { get; set; } = "Auto";
+
+        /// <summary>
+        /// 节能管理总开关。false 时应用完全休眠：不安装钩子、后台循环空转、
+        /// 不施加任何节流，启动时还会还原上次异常退出可能残留的节流状态
+        /// </summary>
+        public bool Enabled { get; set; } = true;
         public List<string> BypassProcessList { get; set; } = new List<string>();
 
         /// <summary>

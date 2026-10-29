@@ -96,8 +96,8 @@ namespace EnergyStarZ.Interop
         {
             try
             {
-                // 检查当前模式，如果处于暂停模式则不处理事件
-                if (EnergyManager.CurrentMode != PowerMode.Paused)
+                // 检查当前模式，如果处于暂停模式或已完全关闭则不处理事件
+                if (EnergyManager.CurrentMode != PowerMode.Paused && EnergyManager.IsEnabled)
                 {
                     EnergyManager.HandleForegroundEvent(hwnd);
                 }

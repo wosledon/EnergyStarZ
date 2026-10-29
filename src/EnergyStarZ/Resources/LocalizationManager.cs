@@ -171,5 +171,8 @@ namespace EnergyStarZ.Resources
         public required Dictionary<string, string> AutoPowerMode { get; set; }
         public required Dictionary<string, string> AutoPowerModeEnabled { get; set; }
         public required Dictionary<string, string> AutoPowerModeDisabled { get; set; }
+        public required Dictionary<string, string> EnergyManagement { get; set; }
+        public required Dictionary<string, string> EnergyManagementEnabled { get; set; }
+        public required Dictionary<string, string> EnergyManagementDisabled { get; set; }
     }
 }

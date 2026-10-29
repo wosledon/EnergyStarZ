@@ -126,6 +126,55 @@ namespace EnergyStarZ
         }
 
         private static volatile PowerMode _currentMode = PowerMode.Auto;
+
+        /// <summary>
+        /// 节能管理总开关。关闭后：不安装钩子、后台循环空转、
+        /// 不施加任何节流，并还原所有已节流的进程
+        /// </summary>
+        private static volatile bool _enabled = true;
+
+        public static bool IsEnabled => _enabled;
+
+        /// <summary>
+        /// 运行时切换节能管理总开关
+        /// </summary>
+        public static void SetEnabled(bool enabled)
+        {
+            if (_enabled == enabled)
+                return;
+
+            _enabled = enabled;
+
+            if (!enabled)
+            {
+                // 立即还原所有被节流的进程，并停止响应前台切换
+                _ = RestoreAllProcessesToNormalAsync();
+                HookManager.UnsubscribeWindowEvents();
+                AppLogger.Info("Energy management completely disabled.");
+            }
+            else
+            {
+                // 重新启用：先刷新进程缓存，再按当前模式恢复工作
+                RefreshProcessCache();
+                if (CurrentMode != PowerMode.Paused)
+                {
+                    HookManager.SubscribeToWindowEvents();
+                }
+
+                AppLogger.Info("Energy management enabled.");
+            }
+        }
+
+        /// <summary>
+        /// 启动时的安全清理：刷新一次进程缓存并还原所有节流状态，
+        /// 用于清理上次异常退出可能残留的节流（完全关闭模式下启动时调用）
+        /// </summary>
+        public static async Task CleanupThrottledProcessesAsync()
+        {
+            RefreshProcessCache();
+            await RestoreAllProcessesToNormalAsync();
+        }
+
         public static PowerMode CurrentMode
         {
             get => _currentMode;
@@ -212,6 +261,7 @@ namespace EnergyStarZ
                 LowMemoryPriorityEnabled = settings.EnableLowMemoryPriority;
                 LowMemoryPriorityOnAcPower = settings.LowMemoryPriorityOnAcPower;
                 PauseOnAcPower = settings.PauseOnAcPower;
+                _enabled = settings.Enabled;
                 DeepModeIdleMinutes = settings.DeepModeIdleMinutes;
                 LowBatteryEscalatePercent = settings.LowBatteryEscalatePercent;
             }
@@ -279,14 +329,17 @@ namespace EnergyStarZ
             {
                 try
                 {
-                    RefreshProcessCache();
-                    consecutiveFailures = 0; // 重置失败计数
+                    if (_enabled && CurrentMode != PowerMode.Paused)
+                    {
+                        RefreshProcessCache();
+                        consecutiveFailures = 0; // 重置失败计数
 
-                    // 定期清理过期的 LRU 条目（每分钟一次）
-                    CleanupExpiredApps();
+                        // 定期清理过期的 LRU 条目（每分钟一次）
+                        CleanupExpiredApps();
 
-                    // 反馈升级/回退：根据实测 CPU 占用调整档位
-                    EvaluateEscalation();
+                        // 反馈升级/回退：根据实测 CPU 占用调整档位
+                        EvaluateEscalation();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -346,6 +399,9 @@ namespace EnergyStarZ
 
         private static void CheckPowerStatus()
         {
+            if (!_enabled)
+                return;
+
             // 电源状态始终更新：它决定节流策略的激进程度（电池=激进，交流电=偏流畅度）
             var powerLineStatus = SystemInformation.PowerStatus.PowerLineStatus;
             bool isOnBattery = powerLineStatus == PowerLineStatus.Offline;
@@ -1046,7 +1102,7 @@ namespace EnergyStarZ
 
         public static void ThrottleAllUserBackgroundProcesses()
         {
-            if (CurrentMode == PowerMode.Paused)
+            if (CurrentMode == PowerMode.Paused || !_enabled)
                 return;
 
             uint currentPendingPid;
@@ -1110,7 +1166,7 @@ namespace EnergyStarZ
 
         public static void HandleForegroundEvent(IntPtr hwnd)
         {
-            if (CurrentMode == PowerMode.Paused)
+            if (CurrentMode == PowerMode.Paused || !_enabled)
                 return;
 
             var windowThreadId = Interop.Win32Api.GetWindowThreadProcessId(hwnd, out uint procId);

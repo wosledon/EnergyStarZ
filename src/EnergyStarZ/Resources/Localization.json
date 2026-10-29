@@ -78,6 +78,18 @@
     "AutoPowerModeDisabled": {
       "en-US": "Auto power mode disabled",
       "zh-CN": "自动电源模式已禁用"
+    },
+    "EnergyManagement": {
+      "en-US": "Energy Management",
+      "zh-CN": "节能管理"
+    },
+    "EnergyManagementEnabled": {
+      "en-US": "Energy management enabled",
+      "zh-CN": "节能管理已启用"
+    },
+    "EnergyManagementDisabled": {
+      "en-US": "Energy management completely disabled\nAll throttling has been restored",
+      "zh-CN": "节能管理已完全关闭\n所有节流状态已还原"
     }
   }
 }
