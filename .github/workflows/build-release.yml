@@ -117,14 +117,22 @@ jobs:
       - name: Prepare release notes
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}' -replace '^v',''
+          $tag = '${{ github.ref_name }}'
+          # checkout 默认可能只取到提交而非带注释的标签对象，
+          # 这里显式抓取，否则 %(contents) 会回退成提交标题
+          git fetch --force origin "refs/tags/${tag}:refs/tags/$tag"
+          $version = $tag -replace '^v',''
           $footer = (Get-Content -Raw -Encoding utf8 '.github/release-template.md') -replace '\{VERSION\}', $version
-          $highlights = (git tag -l --format='%(contents)' '${{ github.ref_name }}' | Out-String).Trim()
+          $highlights = (git tag -l --format='%(contents)' $tag | Out-String).Trim()
+          if (-not $highlights) {
+            Write-Warning "No tag annotation found for $tag; using footer only."
+          }
           if ($highlights) {
             "$highlights`n`n---`n`n$footer" | Out-File -FilePath release-notes.md -Encoding utf8
           } else {
             $footer | Out-File -FilePath release-notes.md -Encoding utf8
           }
+          Get-Content -Raw release-notes.md | Write-Host
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
