@@ -114,6 +114,8 @@ jobs:
           path: artifacts
 
       # 发版说明 = 标签备注（本次亮点，打标签时写） + 固定尾部模板 + 自动变更日志
+      # 打标签时务必使用 --cleanup=verbatim，否则 git 会把 # 开头的行当注释删掉：
+      #   git tag -a vX.Y.Z -F notes.md --cleanup=verbatim
       - name: Prepare release notes
         shell: pwsh
         run: |
