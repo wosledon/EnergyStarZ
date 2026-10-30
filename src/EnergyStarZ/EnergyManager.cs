@@ -1,5 +1,6 @@
 using EnergyStarZ.Interop;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -22,7 +23,8 @@ namespace EnergyStarZ
 
         // 硬编码最低保护列表 - 无论配置如何，这些进程永远不被节流
         // 包含 P0 核心系统进程和部分 P1 用户体验关键进程
-        private static readonly HashSet<string> _hardcodedBypassList = new(StringComparer.OrdinalIgnoreCase)
+        // 使用 FrozenSet：只读且查找更快，配合 GetAlternateLookup 可零分配查询
+        private static readonly FrozenSet<string> _hardcodedBypassList = new[]
         {
             // === P0 核心系统进程 ===
             "csrss.exe",              // Client/Server Runtime Subsystem
@@ -46,24 +48,23 @@ namespace EnergyStarZ
             // === P1 输入与语言 ===
             "ctfmon.exe",             // Text Services Framework（输入法支持）
             "ChsIME.exe",             // 中文输入法（简体）
-        };
+        }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
         public static IReadOnlyCollection<string> BypassProcessList
         {
             get
             {
-                lock (_bypassListLock)
-                {
-                    // 合并配置列表和硬编码保护列表
-                    var mergedList = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
-                    mergedList.UnionWith(_hardcodedBypassList);
-                    return mergedList.ToList().AsReadOnly();
-                }
+                // 合并配置列表和硬编码保护列表
+                var mergedList = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
+                mergedList.UnionWith(_hardcodedBypassList);
+                return mergedList.ToList().AsReadOnly();
             }
         }
 
-        private static readonly object _bypassListLock = new();
-        private static HashSet<string> _bypassProcessList = new(StringComparer.OrdinalIgnoreCase);
+        // 配置的保护列表：不可变快照，重载配置时整体替换。
+        // 读取方无需加锁、也不会产生分配（前台切换的热路径）
+        private static volatile FrozenSet<string> _bypassProcessList =
+            Array.Empty<string>().ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
         // Speical handling needs for UWP to get the child window process
         public const string UWPFrameHostApp = "ApplicationFrameHost.exe";
@@ -245,10 +246,9 @@ namespace EnergyStarZ
                 var config = ConfigurationHelper.LoadConfiguration();
                 config.GetSection("AppSettings").Bind(settings);
 
-                lock (_bypassListLock)
-                {
-                    _bypassProcessList = new HashSet<string>(settings.BypassProcessList ?? Enumerable.Empty<string>(), StringComparer.OrdinalIgnoreCase);
-                }
+                // 整体替换不可变快照：读取方无锁、零分配
+                _bypassProcessList = (settings.BypassProcessList ?? Enumerable.Empty<string>())
+                    .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
                 lock (_lruLock)
                 {
@@ -950,8 +950,9 @@ namespace EnergyStarZ
             var cpuSets = ProcessContext.GetEfficiencyCoreCpuSets();
             bool canEscalate = cpuSets is { Length: > 0 };
 
-            foreach (var state in ProcessCache.Values)
+            foreach (var kvp in ProcessCache)
             {
+                var state = kvp.Value;
                 if (state.Tier == ThrottleTier.None)
                     continue;
 
@@ -1036,22 +1037,19 @@ namespace EnergyStarZ
         /// </summary>
         private static void ApplyThrottlePolicy(uint excludePid1, uint excludePid2 = 0)
         {
-            var processSnapshot = ProcessCache.Values.ToList();
-
-            // 一次性快照保护列表：避免逐个加锁，也避免重载配置时的竞态
-            HashSet<string> bypassSnapshot;
-            lock (_bypassListLock)
-            {
-                bypassSnapshot = new HashSet<string>(_bypassProcessList, StringComparer.OrdinalIgnoreCase);
-            }
+            // 保护列表是配置重载时整体替换的不可变快照，读取无锁也无分配
+            var bypassSnapshot = _bypassProcessList;
 
             bool deepMode = IsDeepModeActive();
-            HashSet<int> visiblePids = deepMode ? new HashSet<int>() : ProcessContext.GetVisibleProcessIds();
+            HashSet<int>? visiblePids = deepMode ? null : ProcessContext.GetVisibleProcessIds();
             bool fullscreen = !deepMode && ProcessContext.IsFullscreenOrPresentation();
             uint idleMs = ProcessContext.GetIdleTimeMs();
 
-            foreach (var state in processSnapshot)
+            // 直接枚举 ConcurrentDictionary 本身：其枚举器无锁且零分配。
+            // 注意不能用 .Values —— 该属性会拿全部锁并复制出一个 List
+            foreach (var kvp in ProcessCache)
             {
+                var state = kvp.Value;
                 uint pid = (uint)state.Id;
 
                 if (pid == excludePid1 || pid == excludePid2)
@@ -1082,7 +1080,7 @@ namespace EnergyStarZ
                 }
 
                 // 有可见窗口的进程不节流（深度模式下豁免失效）
-                if (visiblePids.Contains(state.Id))
+                if (visiblePids?.Contains(state.Id) == true)
                 {
                     ApplyTier(state, ThrottleTier.None);
                     continue;
@@ -1243,18 +1241,13 @@ namespace EnergyStarZ
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool IsBypassProcess(ReadOnlySpan<char> processName)
         {
-            // 首先检查硬编码保护列表（最高优先级）- O(1) HashSet 查找
-            var processNameStr = processName.ToString();
-            if (_hardcodedBypassList.Contains(processNameStr))
+            // GetAlternateLookup 提供基于 ReadOnlySpan<char> 的零分配查找（.NET 9+）
+            if (_hardcodedBypassList.GetAlternateLookup<ReadOnlySpan<char>>().Contains(processName))
             {
                 return true;
             }
 
-            // 然后检查配置列表 - O(1) HashSet 查找
-            lock (_bypassListLock)
-            {
-                return _bypassProcessList.Contains(processNameStr, StringComparer.OrdinalIgnoreCase);
-            }
+            return _bypassProcessList.GetAlternateLookup<ReadOnlySpan<char>>().Contains(processName);
         }
 
         public static void HandleForegroundEvent(IntPtr hwnd)
