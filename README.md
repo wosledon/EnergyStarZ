@@ -2,7 +2,7 @@
 
 **[中文文档](README_zh.md)** | English Documentation | **[项目主页](https://wosledon.github.io/EnergyStarZ/)**
 
-![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
+![Version](https://img.shields.io/badge/version-1.2.0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011%2024H2+-0078D6)
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -35,10 +35,10 @@ Grab the latest build from the [Releases](https://github.com/wosledon/EnergyStar
 
 | File | When to use |
 |---|---|
-| `EnergyStarZ-x64-SelfContained-1.1.0.zip` | **Recommended** — bundles the .NET runtime, no prerequisites |
-| `EnergyStarZ-x86-SelfContained-1.1.0.zip` | 32-bit systems |
-| `EnergyStarZ-x64-FrameworkDependent-1.1.0.zip` | You already have the .NET 10 desktop runtime — much smaller |
-| `EnergyStarZ-x86-FrameworkDependent-1.1.0.zip` | 32-bit + runtime already installed |
+| `EnergyStarZ-x64-SelfContained-1.2.0.zip` | **Recommended** — bundles the .NET runtime, no prerequisites |
+| `EnergyStarZ-x86-SelfContained-1.2.0.zip` | 32-bit systems |
+| `EnergyStarZ-x64-FrameworkDependent-1.2.0.zip` | You already have the .NET 10 desktop runtime — much smaller |
+| `EnergyStarZ-x86-FrameworkDependent-1.2.0.zip` | 32-bit + runtime already installed |
 
 Unzip anywhere and run `EnergyStarZ.exe` — it appears in the system tray.
 

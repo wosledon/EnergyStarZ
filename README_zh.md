@@ -2,7 +2,7 @@
 
 [English Documentation](README.md) | **中文文档** | **[项目主页](https://wosledon.github.io/EnergyStarZ/)**
 
-![Version](https://img.shields.io/badge/version-1.1.0-brightgreen)
+![Version](https://img.shields.io/badge/version-1.2.0-brightgreen)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011%2024H2+-0078D6)
 ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -35,10 +35,10 @@ EnergyStarZ 监视你真正在用的应用，让其他所有程序在 CPU、磁�
 
 | 文件 | 适用场景 |
 |---|---|
-| `EnergyStarZ-x64-SelfContained-1.1.0.zip` | **推荐**——内置 .NET 运行时，无需任何前置条件 |
-| `EnergyStarZ-x86-SelfContained-1.1.0.zip` | 32 位系统 |
-| `EnergyStarZ-x64-FrameworkDependent-1.1.0.zip` | 已装 .NET 10 桌面运行时——体积小得多 |
-| `EnergyStarZ-x86-FrameworkDependent-1.1.0.zip` | 32 位 + 已装运行时 |
+| `EnergyStarZ-x64-SelfContained-1.2.0.zip` | **推荐**——内置 .NET 运行时，无需任何前置条件 |
+| `EnergyStarZ-x86-SelfContained-1.2.0.zip` | 32 位系统 |
+| `EnergyStarZ-x64-FrameworkDependent-1.2.0.zip` | 已装 .NET 10 桌面运行时——体积小得多 |
+| `EnergyStarZ-x86-FrameworkDependent-1.2.0.zip` | 32 位 + 已装运行时 |
 
 解压到任意位置运行 `EnergyStarZ.exe`，图标会出现在系统托盘。
 
